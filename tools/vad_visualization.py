@@ -173,7 +173,7 @@ def group_results_by_media(results: list[JsonResult]) -> list[MediaGroup]:
 
     groups = list(grouped.values())
     for group in groups:
-        group.results.sort(key=lambda r: r.json_path.as_posix())
+        group.results.sort(key=sort_result_by_threshold)
     groups.sort(key=lambda g: (g.media_path.name, len(g.results)))
     return groups
 
@@ -182,6 +182,13 @@ def choose_default_group(groups: list[MediaGroup]) -> MediaGroup | None:
     if not groups:
         return None
     return sorted(groups, key=lambda g: (-len(g.results), g.media_path.name))[0]
+
+
+def sort_result_by_threshold(result: JsonResult) -> tuple[bool, float, str]:
+    threshold = result.threshold
+    if threshold is None:
+        return True, float("inf"), result.json_path.as_posix()
+    return False, threshold, result.json_path.as_posix()
 
 
 def load_audio_waveform(
