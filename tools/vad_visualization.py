@@ -57,6 +57,7 @@ class JsonResult:
     media_path: Path
     speakers: list[str]
     segments: list[Segment]
+    threshold: float | None
     raw: dict[str, Any]
 
     @property
@@ -139,11 +140,25 @@ def load_result(json_path: Path) -> JsonResult:
 
     segments.sort(key=lambda s: (s.start, s.end, s.speaker))
 
+    threshold: float | None = None
+    parameters = raw.get("parameters")
+    if isinstance(parameters, dict):
+        try:
+            threshold = float(parameters.get("threshold"))
+        except Exception:
+            threshold = None
+    if threshold is None:
+        try:
+            threshold = float(raw.get("threshold"))
+        except Exception:
+            threshold = None
+
     return JsonResult(
         json_path=json_path.resolve(),
         media_path=media_path,
         speakers=["VAD"] if segments else [],
         segments=segments,
+        threshold=threshold,
         raw=raw,
     )
 
@@ -232,13 +247,29 @@ class ResultPanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(8)
 
+        header_row = QWidget()
+        header_layout = QHBoxLayout(header_row)
+        header_layout.setContentsMargins(2, 0, 2, 0)
+        header_layout.setSpacing(8)
+
         header = QLabel(result.label)
         header.setTextInteractionFlags(Qt.TextSelectableByMouse)
         header.setStyleSheet(
             "color: #6b7280; font-size: 11px; font-weight: 600;"
-            "padding-left: 2px;"
         )
-        outer.addWidget(header)
+        header_layout.addWidget(header, 1)
+
+        threshold_label = QLabel(self._format_threshold_label(result.threshold))
+        threshold_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        threshold_label.setStyleSheet(
+            "color: #374151; font-size: 11px; font-weight: 600;"
+            "background-color: #eef2f7; border: 1px solid #dbe3ee;"
+            "border-radius: 999px; padding: 2px 8px;"
+        )
+        threshold_label.setVisible(result.threshold is not None)
+        header_layout.addWidget(threshold_label, 0, Qt.AlignRight)
+
+        outer.addWidget(header_row)
 
         self.plot = ClickablePlotWidget()
         self.plot.setBackground("#f8fafc")
@@ -296,6 +327,11 @@ class ResultPanel(QWidget):
         color = QColor(VAD_COLOR)
         color.setAlphaF(max(0.0, min(1.0, alpha)))
         return color
+
+    def _format_threshold_label(self, threshold: float | None) -> str:
+        if threshold is None:
+            return ""
+        return f"threshold: {threshold:.2f}"
 
     def set_playhead(self, time_seconds: float) -> None:
         self.playhead.setPos(max(0.0, min(time_seconds, max(self.waveform_duration, self.result_duration))))
