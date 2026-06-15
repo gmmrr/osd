@@ -12,6 +12,12 @@ import librosa
 import numpy as np
 import soundfile as sf
 
+try:
+    import pyloudnorm as pyln
+except ImportError as exc:  # pragma: no cover - dependency guard
+    pyln = None
+    _PYLOUDNORM_IMPORT_ERROR = exc
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -22,26 +28,32 @@ from config.params import (
     NORMALIZE_TARGET_DBFS,
     NORMALIZE_LIMIT_DB,
     NORMALIZE_WAV_SUBTYPE,
-    NORMALIZE_APPLY_PEAK_SAFETY,
 )
 
 
 def loudness_normalize(
     y: np.ndarray,
+    sample_rate: int,
     target_dbfs: float = NORMALIZE_TARGET_DBFS,
     limit_db: float = NORMALIZE_LIMIT_DB,
 ) -> tuple[np.ndarray, float]:
+    if pyln is None:
+        raise RuntimeError(
+            "pyloudnorm is required for LUFS normalization. "
+            "Install it with: uv pip install pyloudnorm"
+        ) from _PYLOUDNORM_IMPORT_ERROR
+
     if y.size == 0 or np.allclose(y, 0):
         return y, 0.0
 
-    rms = float(np.sqrt(np.mean(y ** 2)))
-    if np.isnan(rms) or rms <= 0.0:
+    meter = pyln.Meter(sample_rate)
+    measured_lufs = float(meter.integrated_loudness(y))
+    if np.isnan(measured_lufs):
         return y, 0.0
 
-    current_db = 20 * np.log10(rms)
-    gain_db = float(np.clip(target_dbfs - current_db, -limit_db, limit_db))
-    factor = 10 ** (gain_db / 20)
-    return y * factor, gain_db
+    gain_db = float(np.clip(target_dbfs - measured_lufs, -limit_db, limit_db))
+    normalized = pyln.normalize.loudness(y, measured_lufs, target_dbfs)
+    return normalized, gain_db
 
 
 def normalize_single_audio(
@@ -72,15 +84,15 @@ def normalize_single_audio(
         y = librosa.resample(y=y, orig_sr=sr, target_sr=AUDIO_SAMPLE_RATE)
         sr = AUDIO_SAMPLE_RATE
 
-    y, gain_db = loudness_normalize(y, target_dbfs=NORMALIZE_TARGET_DBFS, limit_db=NORMALIZE_LIMIT_DB)
-
-    if NORMALIZE_APPLY_PEAK_SAFETY:
-        peak = float(np.max(np.abs(y))) if y.size else 0.0
-        if peak > 0.0:
-            y = np.clip(y / peak, -1, 1)
+    y, gain_db = loudness_normalize(
+        y,
+        sr,
+        target_dbfs=NORMALIZE_TARGET_DBFS,
+        limit_db=NORMALIZE_LIMIT_DB,
+    )
 
     sf.write(out_path, y, sr, subtype=NORMALIZE_WAV_SUBTYPE)
-    print(f"Normalized: {input_file.name} -> {out_path.name} ({gain_db:+.2f} dB, {sr} Hz, mono)")
+    print(f"Normalized: {input_file.name} -> {out_path.name} ({gain_db:+.2f} LU, {sr} Hz, mono, LUFS)")
     return out_path
 
 
