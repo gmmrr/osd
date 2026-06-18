@@ -8,6 +8,7 @@ import argparse
 import json
 import time
 import sys
+import csv
 from pathlib import Path
 
 import numpy as np
@@ -32,6 +33,8 @@ from config.params import (
 SUPPORTED_AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".ogg"}
 DEFAULT_VAD_THRESHOLD = 0.20
 EXPERIMENT_THRESHOLDS = tuple(round(i * 0.05, 2) for i in range(1, 7))
+
+_SPEAKER_ID_CACHE: dict[str, str | None] = {}
 
 
 def format_threshold_suffix(vad_threshold: float) -> str:
@@ -70,6 +73,99 @@ def discover_input_files(input_dir: Path, audio_pattern: str) -> list[Path]:
         p for p in input_dir.glob(audio_pattern)
         if p.is_file() and p.suffix.lower() in SUPPORTED_AUDIO_SUFFIXES
     )
+
+
+def _candidate_metadata_paths(audio_path: Path) -> list[Path]:
+    candidates: list[Path] = []
+    for parent in [audio_path.parent, *audio_path.parents]:
+        for name in ("metadata.jsonl", "metadata.csv"):
+            candidate = parent / name
+            if candidate.exists():
+                candidates.append(candidate)
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(resolved)
+    return unique
+
+
+def _match_wav_reference(audio_path: Path, raw_value: Any) -> bool:
+    if raw_value is None:
+        return False
+
+    value = str(raw_value).strip()
+    if not value:
+        return False
+
+    path_value = Path(value)
+    audio_name = audio_path.name
+    audio_stem = audio_path.stem
+    base_stem = audio_stem.removesuffix("_nml").removesuffix("_std")
+    audio_resolved = str(audio_path.resolve())
+
+    if value == audio_name or value == audio_stem:
+        return True
+    if value == base_stem or audio_name == path_value.name or audio_stem == path_value.stem:
+        return True
+    if base_stem == path_value.stem:
+        return True
+    if audio_resolved == value:
+        return True
+    if value.endswith(audio_name) or value.endswith(audio_stem) or value.endswith(base_stem):
+        return True
+    return False
+
+
+def infer_speaker_id(audio_path: Path) -> str | None:
+    cache_key = str(audio_path.resolve())
+    if cache_key in _SPEAKER_ID_CACHE:
+        return _SPEAKER_ID_CACHE[cache_key]
+
+    inferred: str | None = None
+    for metadata_path in _candidate_metadata_paths(audio_path):
+        try:
+            if metadata_path.suffix.lower() == ".jsonl":
+                with metadata_path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            row = json.loads(line)
+                        except Exception:
+                            continue
+                        if not isinstance(row, dict):
+                            continue
+                        if _match_wav_reference(audio_path, row.get("wav_path")) or _match_wav_reference(
+                            audio_path, row.get("input")
+                        ):
+                            speaker = row.get("speaker_id")
+                            if speaker not in (None, ""):
+                                inferred = str(speaker)
+                                break
+            else:
+                with metadata_path.open("r", encoding="utf-8", newline="") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        if _match_wav_reference(audio_path, row.get("wav_path")) or _match_wav_reference(
+                            audio_path, row.get("input")
+                        ):
+                            speaker = row.get("speaker_id")
+                            if speaker not in (None, ""):
+                                inferred = str(speaker)
+                                break
+        except Exception:
+            continue
+
+        if inferred is not None:
+            break
+
+    _SPEAKER_ID_CACHE[cache_key] = inferred
+    return inferred
 
 
 def merge_segments(segments: list[dict[str, float]]) -> list[dict[str, float]]:
@@ -146,6 +242,7 @@ def vad_single_audio(
     mean_e = float(np.mean(smooth)) if smooth.size else 0.0
     energy_threshold = VAD_ENERGY_REL_THRESHOLD * mean_e
     n_samples = len(wav_cpu)
+    speaker_id = infer_speaker_id(audio_path)
 
     for seg in speech_timestamps:
         start = int(seg["start"])
@@ -167,6 +264,7 @@ def vad_single_audio(
     payload = {
         "input": str(audio_path.resolve()),
         "audio_derivative": audio_path.stem,
+        "speaker_id": speaker_id,
         "sampling_rate": sr,
         "segment_count": len(segments),
         "segments": segments,
@@ -182,6 +280,7 @@ def vad_single_audio(
             "expand_post_s": VAD_EXPAND_POST,
             "expand_delta_s": VAD_EXPAND_DELTA,
             "device": device,
+            "speaker_id": speaker_id,
         },
     }
 
