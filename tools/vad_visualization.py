@@ -32,8 +32,10 @@ from PySide6.QtWidgets import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_JSON_ROOTS = (
-    REPO_ROOT / "data" / "test_diarization",
-    REPO_ROOT / "data" / "test_osdc",
+    REPO_ROOT / "data" / "short_test",
+    REPO_ROOT / "data" / "nonverbal_speech_38k",
+    REPO_ROOT / "data" / "nonverbal_tts",
+    REPO_ROOT / "data" / "ami",
 )
 DEFAULT_WAVEFORM_SAMPLE_RATE = 16_000
 DEFAULT_WAVEFORM_POINTS = 5_000
