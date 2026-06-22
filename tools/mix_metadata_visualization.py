@@ -164,7 +164,7 @@ def draw_mix(ax: plt.Axes, record: dict[str, Any]) -> None:
     ax.tick_params(axis="y", length=0)
     ax.set_title(
         f'{record.get("uri", "mix")} | duration={record.get("duration", duration):.2f}s | segments={total_sources} | '
-        f'speakers={record.get("speaker_count", len(speaker_labels))} | '
+        f'speakers={record["speaker_count"]} | '
         f'max speaker per frame={record.get("max_speakers_per_frame", record.get("max_overlap_speaker", "?"))} | '
         f'{format_overlap_summary(record)}'
     )
