@@ -117,6 +117,8 @@ def discover_json_paths(json_roots: list[Path]) -> list[Path]:
         for path in json_root.rglob("*.json"):
             if not path.is_file():
                 continue
+            if "_vad" not in path.stem:
+                continue
             resolved = path.resolve()
             if resolved in seen:
                 continue
@@ -128,6 +130,8 @@ def discover_json_paths(json_roots: list[Path]) -> list[Path]:
 def load_result(json_path: Path) -> JsonResult:
     with json_path.open("r", encoding="utf-8") as f:
         raw = json.load(f)
+    if not isinstance(raw, dict):
+        raise ValueError(f"Expected a VAD JSON object, got {type(raw).__name__} in {json_path}")
 
     media_path = resolve_media_path(raw, json_path)
     segments: list[Segment] = []
