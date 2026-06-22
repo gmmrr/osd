@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
 from config.params import (
     AUDIO_SAMPLE_RATE,
     VAD_ENERGY_REL_THRESHOLD,
+    VAD_PAD_MS,
     VAD_SMOOTHING_WINDOW,
     VAD_EXPAND_PRE,
     VAD_EXPAND_POST,
@@ -298,7 +299,7 @@ def run_vad_dir(
     vad_threshold: float = DEFAULT_VAD_THRESHOLD,
     vad_min_speech_ms: int = 75,
     vad_min_silence_ms: int = 75,
-    vad_pad_ms: int = 50,
+    vad_pad_ms: int = VAD_PAD_MS,
     device: str = "auto",
     force: bool = False,
     out_suffix: str | None = None,
@@ -348,7 +349,7 @@ def run_vad_experiments_dir(
     audio_pattern: str = "*_std_nml.wav",
     vad_min_speech_ms: int = 75,
     vad_min_silence_ms: int = 75,
-    vad_pad_ms: int = 50,
+    vad_pad_ms: int = VAD_PAD_MS,
     device: str = "auto",
     force: bool = False,
     quiet: bool = False,
@@ -415,7 +416,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--min_speech_ms", type=int, default=75, help="Minimum speech segment length (ms)")
     parser.add_argument("--min_silence_ms", type=int, default=75, help="Minimum silence gap (ms)")
-    parser.add_argument("--pad_ms", type=int, default=50, help="Context padding around each segment (ms)")
+    parser.add_argument("--pad_ms", type=int, default=VAD_PAD_MS, help="Context padding around each segment (ms)")
     parser.add_argument("--device", default="auto", help="Device to use: auto | cuda | cpu")
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
     parser.add_argument(
