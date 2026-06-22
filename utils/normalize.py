@@ -48,11 +48,17 @@ def loudness_normalize(
 
     meter = pyln.Meter(sample_rate)
     measured_lufs = float(meter.integrated_loudness(y))
-    if np.isnan(measured_lufs):
+    if np.isnan(measured_lufs) or np.isinf(measured_lufs):
         return y, 0.0
 
     gain_db = float(np.clip(target_dbfs - measured_lufs, -limit_db, limit_db))
-    normalized = pyln.normalize.loudness(y, measured_lufs, target_dbfs)
+    factor = 10 ** (gain_db / 20)
+    normalized = y * factor
+
+    peak = float(np.max(np.abs(normalized))) if normalized.size else 0.0
+    if peak > 0.98:
+        normalized = normalized * (0.98 / peak)
+
     return normalized, gain_db
 
 
