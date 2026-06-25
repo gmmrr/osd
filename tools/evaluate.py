@@ -5,12 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
-
-os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "matplotlib"))
 
 from pyannote.core import Annotation, Segment, Timeline
 from pyannote.database.util import load_rttm, load_uem
