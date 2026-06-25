@@ -16,7 +16,7 @@ from typing import Any
 try:
     from config.params import AUDIO_SAMPLE_RATE, MIX_POST_SILENCE, MIX_PRE_SILENCE, MIX_SAME_SPEAKER_GAP
 except ModuleNotFoundError:  # pragma: no cover - convenience for `uv run path/to/script.py`
-    sys.path.append(str(Path(__file__).resolve().parents[2]))
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
     from config.params import AUDIO_SAMPLE_RATE, MIX_POST_SILENCE, MIX_PRE_SILENCE, MIX_SAME_SPEAKER_GAP
 
 
