@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,7 +74,7 @@ class Interval:
 
 @dataclass
 class MixResult:
-    json_path: Path
+    uri: str
     media_path: Path
     raw: dict[str, Any]
     speakers: list[str]
@@ -84,7 +83,7 @@ class MixResult:
 
     @property
     def label(self) -> str:
-        return display_relative(self.json_path)
+        return self.uri
 
 
 @dataclass
@@ -104,60 +103,61 @@ def display_relative(path: Path) -> str:
         return str(path)
 
 
-def discover_mix_json_paths(input_dir: Path) -> list[Path]:
-    preferred = [input_dir / "mix.json", input_dir / "metadata.json"]
-    paths: list[Path] = [path.resolve() for path in preferred if path.exists()]
-
+def discover_audio_paths(input_dir: Path) -> list[Path]:
+    audio_dir = input_dir / "audio"
+    if not audio_dir.exists():
+        raise FileNotFoundError(f"Missing audio directory under: {input_dir}")
+    paths = sorted(path.resolve() for path in audio_dir.glob(f"*{DEFAULT_AUDIO_SUFFIX}") if path.is_file())
     if not paths:
-        for path in sorted(input_dir.rglob("*.json")):
-            if not path.is_file():
-                continue
-            if path.name.endswith("_vad.json"):
-                continue
-            paths.append(path.resolve())
-
-    if not paths:
-        raise FileNotFoundError(f"No mix metadata JSON found under: {input_dir}")
-
+        raise FileNotFoundError(f"No audio files found under: {audio_dir}")
     return paths
 
 
-def load_mix_json(json_path: Path) -> list[dict[str, Any]]:
-    with json_path.open("r", encoding="utf-8") as f:
-        raw = json.load(f)
+def load_rttm_segments(input_dir: Path) -> dict[str, list[Segment]]:
+    rttm_dir = input_dir / "rttm"
+    if not rttm_dir.exists():
+        raise FileNotFoundError(f"Missing RTTM directory under: {input_dir}")
 
-    if isinstance(raw, dict):
-        return [raw]
-    if isinstance(raw, list):
-        return [item for item in raw if isinstance(item, dict)]
-    raise ValueError(f"Expected JSON object or array in {json_path}, got {type(raw).__name__}.")
+    grouped: dict[str, list[Segment]] = {}
+    for path in sorted(rttm_dir.glob("*.rttm")):
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) < 8 or parts[0] != "SPEAKER":
+                    continue
+                try:
+                    uri = parts[1]
+                    start = float(parts[3])
+                    duration = float(parts[4])
+                    speaker = parts[7]
+                except Exception:
+                    continue
+                end = start + duration
+                grouped.setdefault(uri, []).append(Segment(speaker=speaker, start=start, end=end))
+
+    for uri in grouped:
+        grouped[uri].sort(key=lambda s: (s.start, s.end, s.speaker))
+    return grouped
 
 
-def resolve_media_path(json_path: Path, raw: dict[str, Any], input_dir: Path) -> Path:
-    uri = str(raw.get("uri", json_path.stem))
-    candidates: list[Path] = [
-        input_dir / "mixed" / f"{uri}{DEFAULT_AUDIO_SUFFIX}",
-        input_dir / f"{uri}{DEFAULT_AUDIO_SUFFIX}",
-        json_path.parent / "mixed" / f"{uri}{DEFAULT_AUDIO_SUFFIX}",
-        json_path.parent / f"{uri}{DEFAULT_AUDIO_SUFFIX}",
-    ]
+def compute_overlap_intervals(segments: list[Segment]) -> tuple[list[Interval], int]:
+    events: list[tuple[float, int]] = []
+    for segment in segments:
+        events.append((segment.start, 1))
+        events.append((segment.end, -1))
+    events.sort(key=lambda item: (item[0], item[1]))
 
-    raw_audio = raw.get("audio")
-    if raw_audio:
-        audio = Path(str(raw_audio))
-        candidates.extend(
-            [
-                audio,
-                json_path.parent / audio,
-                json_path.parent / "mixed" / audio.name,
-            ]
-        )
-
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate.resolve()
-
-    raise FileNotFoundError(f"Could not resolve mixed audio for {uri} under {input_dir}.")
+    overlaps: list[Interval] = []
+    active = 0
+    max_active = 0
+    prev_time: float | None = None
+    for time, delta in events:
+        if prev_time is not None and time > prev_time and active >= 2:
+            overlaps.append(Interval(start=prev_time, end=time, duration=time - prev_time))
+        active += delta
+        max_active = max(max_active, active)
+        prev_time = time
+    return overlaps, max_active
 
 
 def sort_speaker_labels(speakers: list[str]) -> list[str]:
@@ -214,53 +214,37 @@ class ClickablePlotWidget(pg.PlotWidget):
         super().mousePressEvent(ev)
 
 
-def load_mix_result(json_path: Path, input_dir: Path, index: int) -> MixResult:
-    records = load_mix_json(json_path)
-    if index < 0 or index >= len(records):
-        raise IndexError(f"Record index {index} out of range for {json_path} with {len(records)} records.")
+def load_mix_results_from_dir(input_dir: Path) -> list[MixResult]:
+    audio_paths = discover_audio_paths(input_dir)
+    segments_by_uri = load_rttm_segments(input_dir)
+    results: list[MixResult] = []
 
-    raw = records[index]
-    media_path = resolve_media_path(json_path, raw, input_dir)
-
-    speakers = list(raw.get("speaker_labels") or [])
-    if not speakers:
-        speakers = sorted({str(src.get("speaker", "unknown")) for src in raw.get("sources", []) if src.get("speaker")})
-    speakers = sort_speaker_labels(speakers)[:3]
-
-    segments: list[Segment] = []
-    for src in raw.get("sources", []):
-        try:
-            segments.append(
-                Segment(
-                    speaker=str(src["speaker"]),
-                    start=float(src["mix_start"]),
-                    end=float(src["mix_end"]),
-                    source=str(src.get("source", "")),
-                )
+    for audio_path in audio_paths:
+        uri = audio_path.stem
+        segments = segments_by_uri.get(uri, [])
+        speakers = sort_speaker_labels([segment.speaker for segment in segments])[:3]
+        overlaps, max_active = compute_overlap_intervals(segments)
+        info = sf.info(str(audio_path))
+        duration = float(info.duration)
+        raw = {
+            "uri": uri,
+            "duration": duration,
+            "source_count": len(segments),
+            "speaker_count": len(speakers),
+            "max_speakers_per_frame": max_active,
+        }
+        results.append(
+            MixResult(
+                uri=uri,
+                media_path=audio_path.resolve(),
+                raw=raw,
+                speakers=speakers,
+                segments=segments,
+                overlaps=overlaps,
             )
-        except Exception:
-            continue
-    segments.sort(key=lambda s: (s.start, s.end, s.speaker))
+        )
 
-    overlaps: list[Interval] = []
-    for ov in raw.get("overlap", []):
-        try:
-            start = float(ov["start"])
-            end = float(ov["end"])
-            overlaps.append(Interval(start=start, end=end, duration=max(0.0, end - start)))
-        except Exception:
-            continue
-    overlaps.sort(key=lambda item: (item.start, item.end))
-
-    load_waveform(media_path, DEFAULT_WAVEFORM_SAMPLE_RATE, DEFAULT_WAVEFORM_POINTS)
-    return MixResult(
-        json_path=json_path.resolve(),
-        media_path=media_path,
-        raw=raw,
-        speakers=speakers,
-        segments=segments,
-        overlaps=overlaps,
-    )
+    return results
 
 
 def group_results_by_media(results: list[MixResult]) -> list[MixGroup]:
@@ -273,7 +257,7 @@ def group_results_by_media(results: list[MixResult]) -> list[MixGroup]:
 
     groups = list(grouped.values())
     for group in groups:
-        group.results.sort(key=lambda r: r.json_path.as_posix())
+        group.results.sort(key=lambda r: r.uri)
     groups.sort(key=lambda g: (g.media_path.name, len(g.results)))
     return groups
 
@@ -727,7 +711,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--input-dir",
         type=Path,
         required=True,
-        help="Directory containing mix.json and mixed wav files.",
+        help="Dataset root containing audio/ and rttm/.",
     )
     parser.add_argument(
         "--waveform-sample-rate",
@@ -760,21 +744,16 @@ def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
 
-    json_paths = discover_mix_json_paths(args.input_dir)
-    results: list[MixResult] = []
-    for json_path in json_paths:
-        records = load_mix_json(json_path)
-        for index in range(len(records)):
-            results.append(load_mix_result(json_path, args.input_dir, index))
+    results = load_mix_results_from_dir(args.input_dir)
 
     groups = group_results_by_media(results)
     selected_group = select_group(groups)
 
-    print(f"Scanned {len(json_paths)} JSON file(s) under {args.input_dir}")
+    print(f"Scanned {len(results)} audio file(s) under {args.input_dir / 'audio'}")
     if selected_group is not None:
         print(f"Selected source audio: {selected_group.label} ({len(selected_group.results)} mix record(s))")
     else:
-        print("No mix JSON results were found.")
+        print("No mix results were found.")
 
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("Mix Visualization")
