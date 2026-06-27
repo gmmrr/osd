@@ -32,7 +32,9 @@ from config.params import (
 )
 
 SUPPORTED_AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".ogg"}
-DEFAULT_VAD_THRESHOLD = 0.20
+DEFAULT_VAD_THRESHOLD = 0.10
+DEFAULT_MIN_SPEECH_MS = 25
+DEFAULT_MIN_SILENCE_MS = 25
 EXPERIMENT_THRESHOLDS = tuple(round(i * 0.05, 2) for i in range(1, 7))
 
 _SPEAKER_ID_CACHE: dict[str, str | None] = {}
@@ -198,7 +200,7 @@ def vad_single_audio(
     vad_pad_ms: int,
     out_suffix: str | None = None,
     out_dir: Path | None = None,
-    quiet: bool = False,
+    quiet: bool = True,
     force: bool = False,
 ) -> Path:
     """
@@ -208,7 +210,7 @@ def vad_single_audio(
         <stem>_std_nml.wav
     Output:
         <stem>_std_nml_vad.json
-        <stem>_std_nml_vad[xx].json if a threshold is explicitly provided
+        <stem>_std_nml_vad[xx].json only when running experiments
     """
     audio_path = Path(audio_path)
     suffix = out_suffix or ""
@@ -297,14 +299,14 @@ def run_vad_dir(
     input_dir: Path | str,
     audio_pattern: str = "*_std_nml.wav",
     vad_threshold: float = DEFAULT_VAD_THRESHOLD,
-    vad_min_speech_ms: int = 75,
-    vad_min_silence_ms: int = 75,
+    vad_min_speech_ms: int = DEFAULT_MIN_SPEECH_MS,
+    vad_min_silence_ms: int = DEFAULT_MIN_SILENCE_MS,
     vad_pad_ms: int = VAD_PAD_MS,
     device: str = "auto",
     force: bool = False,
     out_suffix: str | None = None,
     out_dir: Path | None = None,
-    quiet: bool = False,
+    quiet: bool = True,
 ) -> None:
     """
     Run VAD on all normalized files in a directory.
@@ -347,12 +349,12 @@ def run_vad_dir(
 def run_vad_experiments_dir(
     input_dir: Path | str,
     audio_pattern: str = "*_std_nml.wav",
-    vad_min_speech_ms: int = 75,
-    vad_min_silence_ms: int = 75,
+    vad_min_speech_ms: int = DEFAULT_MIN_SPEECH_MS,
+    vad_min_silence_ms: int = DEFAULT_MIN_SILENCE_MS,
     vad_pad_ms: int = VAD_PAD_MS,
     device: str = "auto",
     force: bool = False,
-    quiet: bool = False,
+    quiet: bool = True,
 ) -> None:
     """
     Run VAD experiments over a directory for thresholds 0.05..0.30.
@@ -409,13 +411,20 @@ if __name__ == "__main__":
         "--threshold",
         type=float,
         default=None,
-        help=(
-            "Silero speech probability threshold. "
-            "If provided, output files use the suffix _vad[xx].json, for example 0.20 -> _vad20.json."
-        ),
+        help="Silero speech probability threshold.",
     )
-    parser.add_argument("--min_speech_ms", type=int, default=75, help="Minimum speech segment length (ms)")
-    parser.add_argument("--min_silence_ms", type=int, default=75, help="Minimum silence gap (ms)")
+    parser.add_argument(
+        "--min_speech_ms",
+        type=int,
+        default=DEFAULT_MIN_SPEECH_MS,
+        help="Minimum speech segment length (ms)",
+    )
+    parser.add_argument(
+        "--min_silence_ms",
+        type=int,
+        default=DEFAULT_MIN_SILENCE_MS,
+        help="Minimum silence gap (ms)",
+    )
     parser.add_argument("--pad_ms", type=int, default=VAD_PAD_MS, help="Context padding around each segment (ms)")
     parser.add_argument("--device", default="auto", help="Device to use: auto | cuda | cpu")
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
@@ -423,11 +432,6 @@ if __name__ == "__main__":
         "--experiments",
         action="store_true",
         help="Run thresholds from 0.05 to 0.30 in 0.05 steps and write outputs into an _vad subfolder.",
-    )
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Reduce logging output. Useful when you do not want the threshold value echoed in logs.",
     )
     args = parser.parse_args()
 
@@ -443,11 +447,9 @@ if __name__ == "__main__":
             vad_pad_ms=args.pad_ms,
             device=args.device,
             force=args.force,
-            quiet=args.quiet,
         )
     else:
         vad_threshold = DEFAULT_VAD_THRESHOLD if args.threshold is None else args.threshold
-        out_suffix = format_threshold_suffix(args.threshold) if args.threshold is not None else None
 
         run_vad_dir(
             args.input_dir,
@@ -458,6 +460,4 @@ if __name__ == "__main__":
             vad_pad_ms=args.pad_ms,
             device=args.device,
             force=args.force,
-            out_suffix=out_suffix,
-            quiet=args.quiet,
         )
