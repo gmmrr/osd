@@ -97,7 +97,10 @@ DEFAULT_OUTPUT_DIR = REPO_ROOT / "data/test_osdc/local_segmentation_3_0"
 DEFAULT_MODEL_PATH = REPO_ROOT / "models/pyannote-segmentation-3.0"
 DEFAULT_PIPELINE_NAME = "pyannote.audio.Inference"
 DEFAULT_SAMPLE_RATE = 16000
-DEFAULT_OVERLAP_THRESHOLD = 0.5
+DEFAULT_ONSET = 0.2
+DEFAULT_OFFSET = 0.1
+DEFAULT_MIN_DURATION_ON = 0.0
+DEFAULT_MIN_DURATION_OFF = 0.0
 SUPPORTED_AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".ogg"}
 
 
@@ -176,14 +179,94 @@ def _load_detector(model_path: Path, device: str):
     return Inference(model, pre_aggregation_hook=lambda scores: scores)
 
 
-def _scores_to_overlap_segments(scores, threshold: float = DEFAULT_OVERLAP_THRESHOLD) -> List[Dict[str, object]]:
+def _to_overlap_score(data: np.ndarray) -> np.ndarray:
+    if data.ndim != 2 or data.shape[1] == 0:
+        return np.zeros(0, dtype=np.float32)
+    if data.shape[1] == 1:
+        return np.asarray(data[:, 0], dtype=np.float32)
+    sorted_scores = np.sort(np.asarray(data, dtype=np.float32), axis=1)
+    return sorted_scores[:, -2]
+
+
+def _fill_short_inactive_gaps(active: np.ndarray, max_gap_frames: int) -> np.ndarray:
+    if max_gap_frames <= 0 or active.size == 0:
+        return active
+
+    filled = active.copy()
+    idx = 0
+    size = len(filled)
+    while idx < size:
+        if filled[idx]:
+            idx += 1
+            continue
+        start = idx
+        while idx < size and not filled[idx]:
+            idx += 1
+        end = idx
+        gap = end - start
+        has_left = start > 0 and filled[start - 1]
+        has_right = end < size and filled[end]
+        if has_left and has_right and gap <= max_gap_frames:
+            filled[start:end] = True
+    return filled
+
+
+def _remove_short_active_runs(active: np.ndarray, min_frames: int) -> np.ndarray:
+    if min_frames <= 1 or active.size == 0:
+        return active
+
+    cleaned = active.copy()
+    idx = 0
+    size = len(cleaned)
+    while idx < size:
+        if not cleaned[idx]:
+            idx += 1
+            continue
+        start = idx
+        while idx < size and cleaned[idx]:
+            idx += 1
+        end = idx
+        if end - start < min_frames:
+            cleaned[start:end] = False
+    return cleaned
+
+
+def _scores_to_overlap_segments(
+    scores,
+    onset: float = DEFAULT_ONSET,
+    offset: float = DEFAULT_OFFSET,
+    min_duration_on: float = DEFAULT_MIN_DURATION_ON,
+    min_duration_off: float = DEFAULT_MIN_DURATION_OFF,
+) -> List[Dict[str, object]]:
     segments: List[Dict[str, object]] = []
     if not hasattr(scores, "data") or scores.data.ndim != 2:
         return segments
 
     data = np.asarray(scores.data)
     window = scores.sliding_window
-    active = (data >= threshold).sum(axis=1) >= 2
+    overlap_score = _to_overlap_score(data)
+    if overlap_score.size == 0:
+        return segments
+
+    active = np.zeros_like(overlap_score, dtype=bool)
+    is_active = False
+    for idx, score in enumerate(overlap_score):
+        if not is_active and score >= onset:
+            is_active = True
+        elif is_active and score < offset:
+            is_active = False
+        active[idx] = is_active
+
+    step = float(getattr(window, "step", 0.0) or 0.0)
+    duration = float(getattr(window, "duration", 0.0) or 0.0)
+    frame_seconds = step if step > 0 else duration
+    if frame_seconds <= 0:
+        frame_seconds = 1.0 / DEFAULT_SAMPLE_RATE
+
+    off_frames = int(round(min_duration_off / frame_seconds))
+    on_frames = max(1, int(round(min_duration_on / frame_seconds)))
+    active = _fill_short_inactive_gaps(active, off_frames)
+    active = _remove_short_active_runs(active, on_frames)
 
     start_idx = None
     for idx, is_active in enumerate(active):
@@ -222,7 +305,10 @@ def detect_single(
     input_path: Path,
     output_dir: Path,
     sample_rate: int = DEFAULT_SAMPLE_RATE,
-    threshold: float = DEFAULT_OVERLAP_THRESHOLD,
+    onset: float = DEFAULT_ONSET,
+    offset: float = DEFAULT_OFFSET,
+    min_duration_on: float = DEFAULT_MIN_DURATION_ON,
+    min_duration_off: float = DEFAULT_MIN_DURATION_OFF,
     force: bool = False,
 ) -> tuple[Path, bool]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -235,7 +321,13 @@ def detect_single(
     audio = _load_audio_in_memory(input_path, sample_rate=sample_rate)
     result = detector(audio)
 
-    overlaps = _scores_to_overlap_segments(result, threshold=threshold)
+    overlaps = _scores_to_overlap_segments(
+        result,
+        onset=onset,
+        offset=offset,
+        min_duration_on=min_duration_on,
+        min_duration_off=min_duration_off,
+    )
     overlap_duration = round(sum(item["duration"] for item in overlaps), 3)
     input_duration = round(float(audio["waveform"].shape[-1]) / sample_rate, 3)
 
@@ -245,7 +337,11 @@ def detect_single(
         "model_path": str(DEFAULT_MODEL_PATH.resolve()),
         "pipeline_name": DEFAULT_PIPELINE_NAME,
         "sample_rate": sample_rate,
-        "overlap_threshold": threshold,
+        "onset": onset,
+        "offset": offset,
+        "min_duration_on": min_duration_on,
+        "min_duration_off": min_duration_off,
+        "overlap_threshold": onset,
         "input_duration": input_duration,
         "num_overlap_segments": len(overlaps),
         "overlap_duration": overlap_duration,
@@ -265,7 +361,10 @@ def run_detection(
     model_path: Path | str = DEFAULT_MODEL_PATH,
     device: str = "auto",
     sample_rate: int = DEFAULT_SAMPLE_RATE,
-    threshold: float = DEFAULT_OVERLAP_THRESHOLD,
+    onset: float = DEFAULT_ONSET,
+    offset: float = DEFAULT_OFFSET,
+    min_duration_on: float = DEFAULT_MIN_DURATION_ON,
+    min_duration_off: float = DEFAULT_MIN_DURATION_OFF,
     force: bool = False,
 ) -> tuple[int, int]:
     input_path = Path(input_path)
@@ -284,7 +383,10 @@ def run_detection(
             input_path=in_file,
             output_dir=output_dir,
             sample_rate=sample_rate,
-            threshold=threshold,
+            onset=onset,
+            offset=offset,
+            min_duration_on=min_duration_on,
+            min_duration_off=min_duration_off,
             force=force,
         )
         skipped += int(did_skip)
@@ -316,11 +418,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MODEL_PATH,
         help="Local pyannote model directory.",
     )
+    parser.add_argument("--onset", type=float, default=DEFAULT_ONSET, help="Start overlap when score >= onset.")
+    parser.add_argument("--offset", type=float, default=DEFAULT_OFFSET, help="End overlap when score < offset.")
     parser.add_argument(
-        "--threshold",
+        "--min-duration-on",
         type=float,
-        default=DEFAULT_OVERLAP_THRESHOLD,
-        help="Overlap score threshold. Lower values are more permissive.",
+        default=DEFAULT_MIN_DURATION_ON,
+        help="Remove predicted overlap segments shorter than this many seconds.",
+    )
+    parser.add_argument(
+        "--min-duration-off",
+        type=float,
+        default=DEFAULT_MIN_DURATION_OFF,
+        help="Fill non-overlap gaps shorter than this many seconds.",
     )
     parser.add_argument(
         "--force",
@@ -351,7 +461,10 @@ def main() -> None:
         model_path=args.model_path,
         device=args.device,
         sample_rate=args.sample_rate,
-        threshold=args.threshold,
+        onset=args.onset,
+        offset=args.offset,
+        min_duration_on=args.min_duration_on,
+        min_duration_off=args.min_duration_off,
         force=args.force,
     )
 
