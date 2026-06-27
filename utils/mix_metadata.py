@@ -560,7 +560,7 @@ def parse_args() -> argparse.Namespace:
         default=(0.2, 0.0),
         help="Center and random offset for overlap ratio. Example: 0.4 0.1 -> uniform(0.3, 0.5).",
     )
-    parser.add_argument("--min-duration", type=float, default=0.5)
+    parser.add_argument("--min-segment-duration", dest="min_segment_duration", type=float, default=0.5)
     parser.add_argument("--min-mixture-duration", type=float, default=15.0)
     parser.add_argument("--max-mixture-duration", type=float, default=25.0)
     parser.add_argument("--seed", type=int, default=42)
@@ -591,8 +591,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--min-mixture-duration must be positive.")
     if args.max_mixture_duration < args.min_mixture_duration:
         raise ValueError("--max-mixture-duration must be >= --min-mixture-duration.")
-    if args.min_duration < 0:
-        raise ValueError("--min-duration must be non-negative.")
+    if args.min_segment_duration < 0:
+        raise ValueError("--min-segment-duration must be non-negative.")
     if args.overlap_ratios[1] < 0:
         raise ValueError("--overlap-ratios OFFSET must be non-negative.")
     if args.max_speakers < 2:
@@ -609,7 +609,7 @@ def main() -> None:
     groups = collect_groups(
         vad_root=args.vad_dir,
         vad_pattern=args.vad_pattern,
-        min_duration=args.min_duration,
+        min_duration=args.min_segment_duration,
         require_speaker_id=args.require_speaker_id,
     )
     if len(groups) < 2:
@@ -640,11 +640,22 @@ def main() -> None:
             mixtures.append(record)
 
     write_json(mixtures, args.out, force=args.force)
+    usage_counts = Counter(
+        name
+        for mixture in mixtures
+        for name in {
+            str(source["audio_derivative"])
+            for source in mixture.get("sources", [])
+        }
+    )
     print(f"Loaded active segments: {sum(len(group.segments) for group in groups)}")
     print(f"Loaded speaker groups: {len(groups)}")
     print(f"Wrote mixtures: {len(mixtures)}")
     print(f"Attempts: {attempts}")
     print(f"Output: {args.out}")
+    print("Source usage counts:")
+    for name in sorted(usage_counts):
+        print(f"  {name}: {usage_counts[name]}")
 
 
 if __name__ == "__main__":
