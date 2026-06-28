@@ -121,10 +121,17 @@ def run_normalize_dir(
     print("✅ Normalization completed.")
 
 
-if __name__ == "__main__":
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run normalization over a directory.")
     parser.add_argument("--input-dir", required=True, help="Directory containing *_std.wav files")
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
-    args = parser.parse_args()
+    return parser.parse_args()
 
+
+def main() -> None:
+    args = parse_args()
     run_normalize_dir(args.input_dir, force=args.force)
+
+
+if __name__ == "__main__":
+    main()
