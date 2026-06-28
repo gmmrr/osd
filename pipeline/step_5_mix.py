@@ -19,18 +19,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from config.params import (
     STEP_1_AUDIO_SAMPLE_RATE,
+    STEP_5_SPLITS,
+    STEP_5_TRAIN_RATIO,
+    STEP_5_DEV_RATIO,
+    STEP_5_TEST_RATIO,
 )
-
-EXT_WAV = ".wav"
-STEP_5_SPLITS = ("train", "dev", "test")
-STEP_5_TRAIN_RATIO = 0.8
-STEP_5_DEV_RATIO = 0.1
-STEP_5_TEST_RATIO = 0.1
-STEP_5_SEED = 42
-STEP_5_N_MIXTURES = 5
-STEP_5_PREFIX = "mix"
-STEP_5_INPUT_HELP = "Path to mix.json produced by mix_metadata.py."
-STEP_5_OUTPUT_DIR_HELP = "Dataset root directory to write audio/, rttm/, uem/, lists/, and database.yml."
 
 
 def load_mix_records(path: Path) -> list[dict[str, Any]]:
@@ -65,12 +58,6 @@ def slice_audio(audio: np.ndarray, start_sec: float, end_sec: float, sample_rate
     return audio[:, start:end]
 
 
-def apply_gain(audio: np.ndarray, gain_db: float) -> np.ndarray:
-    if audio.size == 0:
-        return audio
-    return audio * float(10 ** (gain_db / 20))
-
-
 def render_mix(record: dict[str, Any], output_path: Path) -> Path:
     sample_rate = int(record.get("sample_rate", STEP_1_AUDIO_SAMPLE_RATE))
     duration = float(record["duration"])
@@ -85,7 +72,8 @@ def render_mix(record: dict[str, Any], output_path: Path) -> Path:
         audio_path = Path(source["audio"])
         audio = load_source_audio(audio_path, sample_rate)
         segment = slice_audio(audio, float(source["orig_start"]), float(source["orig_end"]), sample_rate)
-        segment = apply_gain(segment, float(source.get("gain_db", 0.0)))
+        if segment.size:
+            segment = segment * float(10 ** (float(source.get("gain_db", 0.0)) / 20))
 
         start = max(0, int(round(float(source["mix_start"]) * sample_rate)))
         end = min(out_frames, start + segment.shape[1])
@@ -99,22 +87,22 @@ def render_mix(record: dict[str, Any], output_path: Path) -> Path:
     return output_path
 
 
-def split_key(record: dict[str, Any], train_ratio: float, dev_ratio: float, test_ratio: float) -> str:
+def split_key(record: dict[str, Any]) -> str:
     raw_split = str(record.get("split", "")).strip().lower()
     if raw_split in {"train", "dev", "test"}:
         return raw_split
     if raw_split in {"val", "valid", "validation"}:
         return "dev"
 
-    total = train_ratio + dev_ratio + test_ratio
+    total = STEP_5_TRAIN_RATIO + STEP_5_DEV_RATIO + STEP_5_TEST_RATIO
     if total <= 0:
         raise ValueError("Split ratios must sum to a positive value.")
 
     digest = hashlib.sha1(str(record.get("uri", "")).encode("utf-8")).digest()
     value = int.from_bytes(digest[:8], "big") / float(2**64)
 
-    train_cut = train_ratio / total
-    dev_cut = (train_ratio + dev_ratio) / total
+    train_cut = STEP_5_TRAIN_RATIO / total
+    dev_cut = (STEP_5_TRAIN_RATIO + STEP_5_DEV_RATIO) / total
     if value < train_cut:
         return "train"
     if value < dev_cut:
@@ -146,11 +134,11 @@ def write_split_files(dataset_root: Path, records: list[dict[str, Any]], force: 
 
     split_records: dict[str, list[dict[str, Any]]] = {split: [] for split in STEP_5_SPLITS}
     for record in records:
-        split = split_key(record, STEP_5_TRAIN_RATIO, STEP_5_DEV_RATIO, STEP_5_TEST_RATIO)
+        split = split_key(record)
         split_records[split].append(record)
 
         uri = str(record.get("uri", "mix"))
-        audio_path = audio_dir / f"{uri}{EXT_WAV}"
+        audio_path = audio_dir / f"{uri}.wav"
         if not audio_path.exists() or force:
             render_mix(record, audio_path)
 
@@ -206,13 +194,8 @@ def write_split_files(dataset_root: Path, records: list[dict[str, Any]], force: 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render mixture wavs and dataset manifests from mix metadata JSON.")
-    parser.add_argument("--input", type=Path, required=True, help=STEP_5_INPUT_HELP)
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        required=True,
-        help=STEP_5_OUTPUT_DIR_HELP,
-    )
+    parser.add_argument("--input", type=Path, required=True, help="Path to mix.json produced by mix_metadata.py.")
+    parser.add_argument("--output-dir", type=Path, required=True, help="Dataset root directory to write audio/, rttm/, uem/, lists/, and database.yml.")
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs.")
     return parser.parse_args()
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# --- RMS VAD ---
+# --- VAD ---
 
 from __future__ import annotations
 
@@ -36,54 +36,21 @@ from config.params import (
 )
 
 VAD_MODEL_NAME = "RMS-Energy-VAD"
-VAD_INPUT_DIR_HELP = "Directory containing .wav files"
-
-
-_SPEAKER_ID_CACHE: dict[str, str | None] = {}
 
 
 def _load_audio(path: Path, sample_rate: int = STEP_1_AUDIO_SAMPLE_RATE) -> tuple[np.ndarray, int]:
     wav, sr = sf.read(str(path), always_2d=True, dtype="float32")
-    wav = wav.mean(axis=1).astype(np.float32, copy=False)
+    wav = wav.mean(axis=1)
     if sr != sample_rate and wav.size > 0:
         g = math.gcd(sample_rate, sr)
-        wav = scipy.signal.resample_poly(wav, sample_rate // g, sr // g).astype(np.float32, copy=False)
+        wav = scipy.signal.resample_poly(wav, sample_rate // g, sr // g)
         sr = sample_rate
     return wav, sr
 
 
 def discover_input_files(input_dir: Path) -> list[Path]:
-    input_files: list[Path] = []
-    invalid_files: list[str] = []
-    for path in sorted(input_dir.iterdir()):
-        if not path.is_file() or path.suffix.lower() != ".wav":
-            continue
-        if path.name.endswith("_std_nml.wav"):
-            input_files.append(path)
-        else:
-            invalid_files.append(path.name)
-    if invalid_files:
-        raise ValueError(f"VAD expects only *_std_nml.wav inputs, got: {', '.join(invalid_files[:5])}")
-    return input_files
-
-
-def _candidate_metadata_paths(audio_path: Path) -> list[Path]:
-    candidates: list[Path] = []
-    for parent in [audio_path.parent, *audio_path.parents]:
-        for name in ("metadata.jsonl", "metadata.csv"):
-            candidate = parent / name
-            if candidate.exists():
-                candidates.append(candidate)
-
-    seen: set[Path] = set()
-    unique: list[Path] = []
-    for candidate in candidates:
-        resolved = candidate.resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        unique.append(resolved)
-    return unique
+    paths = [path for path in sorted(input_dir.iterdir()) if path.is_file() and path.suffix.lower() == ".wav"]
+    return [path for path in paths if path.name.endswith("_std_nml.wav")]
 
 
 def _match_wav_reference(audio_path: Path, raw_value: Any) -> bool:
@@ -117,67 +84,55 @@ def _match_wav_reference(audio_path: Path, raw_value: Any) -> bool:
 
 
 def infer_speaker_id(audio_path: Path) -> str | None:
-    cache_key = str(audio_path.resolve())
-    if cache_key in _SPEAKER_ID_CACHE:
-        return _SPEAKER_ID_CACHE[cache_key]
-
     inferred: str | None = None
-    for metadata_path in _candidate_metadata_paths(audio_path):
-        try:
-            if metadata_path.suffix.lower() == ".jsonl":
-                with metadata_path.open("r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            row = json.loads(line)
-                        except Exception:
-                            continue
-                        if not isinstance(row, dict):
-                            continue
-                        if _match_wav_reference(audio_path, row.get("wav_path")) or _match_wav_reference(
-                            audio_path, row.get("input")
-                        ):
-                            speaker = row.get("speaker_id")
-                            if speaker not in (None, ""):
-                                inferred = str(speaker)
-                                break
-            else:
-                with metadata_path.open("r", encoding="utf-8", newline="") as f:
-                    for row in csv.DictReader(f):
-                        if _match_wav_reference(audio_path, row.get("wav_path")) or _match_wav_reference(
-                            audio_path, row.get("input")
-                        ):
-                            speaker = row.get("speaker_id")
-                            if speaker not in (None, ""):
-                                inferred = str(speaker)
-                                break
-        except Exception:
-            continue
+    seen: set[Path] = set()
+    for parent in [audio_path.parent, *audio_path.parents]:
+        for name in ("metadata.jsonl", "metadata.csv"):
+            metadata_path = parent / name
+            if not metadata_path.exists():
+                continue
+
+            resolved = metadata_path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+
+            try:
+                if resolved.suffix.lower() == ".jsonl":
+                    with resolved.open("r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                row = json.loads(line)
+                            except Exception:
+                                continue
+                            if isinstance(row, dict) and (
+                                _match_wav_reference(audio_path, row.get("wav_path"))
+                                or _match_wav_reference(audio_path, row.get("input"))
+                            ):
+                                speaker = row.get("speaker_id")
+                                if speaker not in (None, ""):
+                                    inferred = str(speaker)
+                                    break
+                else:
+                    with resolved.open("r", encoding="utf-8", newline="") as f:
+                        for row in csv.DictReader(f):
+                            if _match_wav_reference(audio_path, row.get("wav_path")) or _match_wav_reference(
+                                audio_path, row.get("input")
+                            ):
+                                speaker = row.get("speaker_id")
+                                if speaker not in (None, ""):
+                                    inferred = str(speaker)
+                                    break
+            except Exception:
+                continue
 
         if inferred is not None:
             break
 
-    _SPEAKER_ID_CACHE[cache_key] = inferred
     return inferred
-
-
-def merge_segments(segments: list[dict[str, float]]) -> list[dict[str, float]]:
-    if not segments:
-        return []
-
-    ordered = sorted(segments, key=lambda seg: (float(seg["start"]), float(seg["end"])))
-    merged: list[dict[str, float]] = [dict(ordered[0])]
-    for seg in ordered[1:]:
-        current = merged[-1]
-        start = float(seg["start"])
-        end = float(seg["end"])
-        if start <= float(current["end"]):
-            current["end"] = max(float(current["end"]), end)
-        else:
-            merged.append(dict(seg))
-    return merged
 
 
 def _mask_to_segments(
@@ -229,7 +184,15 @@ def _mask_to_segments(
         }
         for start, end in merged
     ]
-    return merge_segments(padded)
+
+    merged_padded: list[dict[str, float]] = [dict(padded[0])]
+    for seg in padded[1:]:
+        current = merged_padded[-1]
+        if seg["start"] <= current["end"]:
+            current["end"] = max(current["end"], seg["end"])
+        else:
+            merged_padded.append(dict(seg))
+    return merged_padded
 
 
 def rms_vad_segments(
@@ -245,8 +208,8 @@ def rms_vad_segments(
     if wav_cpu.size == 0:
         return []
 
-    pad = frame_length // 2
-    padded = np.pad(wav_cpu, (pad, pad), mode="constant")
+    frame_pad = frame_length // 2
+    padded = np.pad(wav_cpu, (frame_pad, frame_pad), mode="constant")
     rms = np.array(
         [float(np.sqrt(np.mean(padded[start : start + frame_length] ** 2))) for start in range(0, padded.size - frame_length + 1, hop_length)],
         dtype=np.float32,
@@ -304,9 +267,10 @@ def vad_single_audio(
     )
 
     energy = np.abs(wav_cpu)
+    window = max(1, int(STEP_3_VAD_SMOOTHING_WINDOW))
     smooth = np.convolve(
         energy,
-        np.ones(STEP_3_VAD_SMOOTHING_WINDOW) / STEP_3_VAD_SMOOTHING_WINDOW,
+        np.ones(window) / window,
         mode="same",
     )
     mean_e = float(np.mean(smooth)) if smooth.size else 0.0
@@ -314,20 +278,28 @@ def vad_single_audio(
     n_samples = len(wav_cpu)
     speaker_id = infer_speaker_id(audio_path)
 
-    expanded: list[dict[str, float]] = []
+    step_delta = max(1, int(STEP_3_VAD_EXPAND_DELTA * sr / 1000.0))
+    expanded = []
     for seg in segments:
-        start = max(0, int(round(float(seg["start"]) * sr)) - int(STEP_3_VAD_EXPAND_PRE * sr / 1000.0))
-        end = min(n_samples, int(round(float(seg["end"]) * sr)) + int(STEP_3_VAD_EXPAND_POST * sr / 1000.0))
-        step_delta = max(1, int(STEP_3_VAD_EXPAND_DELTA * sr / 1000.0))
+        start = max(0, int(round(seg["start"] * sr)) - int(STEP_3_VAD_EXPAND_PRE * sr / 1000.0))
+        end = min(n_samples, int(round(seg["end"] * sr)) + int(STEP_3_VAD_EXPAND_POST * sr / 1000.0))
 
         while start > 0 and smooth[start] > energy_threshold:
             start = max(0, start - step_delta)
-        while end < n_samples - 1 and smooth[end] > energy_threshold:
-            end = min(n_samples - 1, end + step_delta)
+        while end < n_samples and smooth[min(end, n_samples - 1)] > energy_threshold:
+            end = min(n_samples, end + step_delta)
 
         expanded.append({"start": round(start / sr, 6), "end": round(end / sr, 6)})
 
-    merged_segments = merge_segments(expanded)
+    expanded.sort(key=lambda seg: (seg["start"], seg["end"]))
+    merged_segments: list[dict[str, float]] = [expanded[0]] if expanded else []
+    for seg in expanded[1:]:
+        current = merged_segments[-1]
+        if seg["start"] <= current["end"]:
+            current["end"] = max(current["end"], seg["end"])
+        else:
+            merged_segments.append(seg)
+
     payload = {
         "input": str(audio_path.resolve()),
         "audio_derivative": audio_path.stem,
@@ -383,7 +355,7 @@ def run_vad_dir(
         return
 
     if not quiet:
-        print(f"🚀 RMS VAD in '{input_dir}'")
+        print(f"🚀 VAD in '{input_dir}'")
         print(f"   • Device: cpu")
         print(f"   • Files: {len(input_files)}")
 
@@ -401,12 +373,12 @@ def run_vad_dir(
         )
 
     if not quiet:
-        print("✅ RMS VAD completed.")
+        print("✅ VAD completed.")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run RMS-based VAD over a directory.")
-    parser.add_argument("--input-dir", required=True, help=VAD_INPUT_DIR_HELP)
+    parser.add_argument("--input-dir", required=True, help="Directory containing .wav files")
     parser.add_argument("--threshold", type=float, default=None, help="Relative RMS threshold.")
     parser.add_argument("--min-speech", type=int, default=STEP_3_VAD_MIN_SPEECH, help="Minimum speech segment length (ms)")
     parser.add_argument("--min-silence", type=int, default=STEP_3_VAD_MIN_SILENCE, help="Minimum silence gap (ms)")

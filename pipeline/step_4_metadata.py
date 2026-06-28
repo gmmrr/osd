@@ -12,49 +12,27 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-try:
-    from config.params import (
-        STEP_4_GAIN_DB_RANGE,
-        STEP_4_MAX_BUILD_TRIALS,
-        STEP_4_MAX_MIXTURE_DURATION,
-        STEP_4_MAX_SPEAKERS,
-        STEP_4_MAX_SPEAKERS_PER_FRAME,
-        STEP_4_MIN_MIXTURE_DURATION,
-        STEP_4_MIN_SEGMENT_DURATION,
-        STEP_4_OVERLAP_CENTER,
-        STEP_4_OVERLAP_OFFSET,
-        STEP_4_POST_SILENCE,
-        STEP_4_PRE_SILENCE,
-        STEP_4_PREFIX,
-        STEP_4_N_MIXTURES,
-        STEP_4_SEED,
-        STEP_4_RATIO_TRIES,
-        STEP_4_SAME_SPEAKER_GAP,
-        STEP_4_SAMPLE_RATE,
-    )
-except ModuleNotFoundError:  # pragma: no cover - convenience for `uv run path/to/script.py`
-    sys.path.append(str(Path(__file__).resolve().parents[1]))
-    from config.params import (
-        STEP_4_GAIN_DB_RANGE,
-        STEP_4_MAX_BUILD_TRIALS,
-        STEP_4_MAX_MIXTURE_DURATION,
-        STEP_4_MAX_SPEAKERS,
-        STEP_4_MAX_SPEAKERS_PER_FRAME,
-        STEP_4_MIN_MIXTURE_DURATION,
-        STEP_4_MIN_SEGMENT_DURATION,
-        STEP_4_OVERLAP_CENTER,
-        STEP_4_OVERLAP_OFFSET,
-        STEP_4_POST_SILENCE,
-        STEP_4_PRE_SILENCE,
-        STEP_4_PREFIX,
-        STEP_4_N_MIXTURES,
-        STEP_4_SEED,
-        STEP_4_RATIO_TRIES,
-        STEP_4_SAME_SPEAKER_GAP,
-        STEP_4_SAMPLE_RATE,
-    )
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-STEP_4_INPUT_HELP = "Path to _std_nml_vad.json files produced by step_3_vad.py."
+from config.params import (
+    STEP_1_AUDIO_SAMPLE_RATE,
+    STEP_4_GAIN_DB_RANGE,
+    STEP_4_MAX_BUILD_TRIALS,
+    STEP_4_MAX_MIXTURE_DURATION,
+    STEP_4_MAX_SPEAKERS,
+    STEP_4_MAX_SPEAKERS_PER_FRAME,
+    STEP_4_MIN_MIXTURE_DURATION,
+    STEP_4_MIN_SEGMENT_DURATION,
+    STEP_4_OVERLAP_RATIO,
+    STEP_4_POST_SILENCE,
+    STEP_4_PRE_SILENCE,
+    STEP_4_RATIO_TRIES,
+    STEP_4_OVERLAP_RANDOM_OFFSET,
+    STEP_4_SAME_SPEAKER_GAP,
+    STEP_4_SEED,
+)
 
 
 @dataclass(frozen=True)
@@ -83,17 +61,16 @@ def load_vad_json(path: Path) -> list[ActiveSegment]:
     with path.open("r", encoding="utf-8") as f:
         item = json.load(f)
 
-    sr = int(item.get("sampling_rate", STEP_4_SAMPLE_RATE))
-    if sr != STEP_4_SAMPLE_RATE:
-        raise ValueError(f"Unexpected sampling_rate={sr} in {path}; expected {STEP_4_SAMPLE_RATE}.")
+    sr = int(item.get("sampling_rate", STEP_1_AUDIO_SAMPLE_RATE))
+    if sr != STEP_1_AUDIO_SAMPLE_RATE:
+        raise ValueError(f"Unexpected sampling_rate={sr} in {path}; expected {STEP_1_AUDIO_SAMPLE_RATE}.")
 
     audio = str(item["input"])
     audio_derivative = str(item.get("audio_derivative", Path(audio).stem))
-
-    raw_speaker_id = item.get("speaker_id")
-    if raw_speaker_id in (None, "") and isinstance(item.get("parameters"), dict):
-        raw_speaker_id = item["parameters"].get("speaker_id")
-    raw_speaker_id = str(raw_speaker_id) if raw_speaker_id not in (None, "") else None
+    speaker_id = item.get("speaker_id")
+    if speaker_id in (None, "") and isinstance(item.get("parameters"), dict):
+        speaker_id = item["parameters"].get("speaker_id")
+    speaker_id = str(speaker_id) if speaker_id not in (None, "") else None
 
     segments: list[ActiveSegment] = []
     for i, seg in enumerate(item.get("segments", [])):
@@ -102,70 +79,54 @@ def load_vad_json(path: Path) -> list[ActiveSegment]:
             end = float(seg["end"])
         except Exception:
             continue
-        if end <= start:
-            continue
-
-        segments.append(
-            ActiveSegment(
-                source_id=f"{audio_derivative}_seg{i:04d}",
-                audio=audio,
-                audio_derivative=audio_derivative,
-                speaker_id=raw_speaker_id,
-                segment_index=i,
-                orig_start=start,
-                orig_end=end,
+        if end > start:
+            segments.append(
+                ActiveSegment(
+                    source_id=f"{audio_derivative}_seg{i:04d}",
+                    audio=audio,
+                    audio_derivative=audio_derivative,
+                    speaker_id=speaker_id,
+                    segment_index=i,
+                    orig_start=start,
+                    orig_end=end,
+                )
             )
-        )
-
     return segments
 
 
-def collect_groups(
-    vad_root: Path,
-    min_duration: float,
-) -> list[SpeakerGroup]:
-    min_duration_sec = min_duration / 1000.0
+def collect_groups(vad_root: Path, min_duration_ms: float) -> list[SpeakerGroup]:
+    min_duration_sec = min_duration_ms / 1000.0
+    paths = sorted(vad_root.rglob("*.json"))
+    invalid = [str(path.relative_to(vad_root)) for path in paths if not path.name.endswith("_std_nml_vad.json")]
+    if invalid:
+        raise ValueError("Metadata expects only *_std_nml_vad.json inputs, got: " + ", ".join(invalid[:5]))
+
     grouped: dict[str, list[ActiveSegment]] = {}
-    invalid_json: list[str] = []
-    for path in sorted(vad_root.rglob("*.json")):
+    for path in paths:
         if not path.name.endswith("_std_nml_vad.json"):
-            invalid_json.append(str(path.relative_to(vad_root)))
             continue
         for seg in load_vad_json(path):
-            if seg.duration < min_duration_sec:
-                continue
-            grouped.setdefault(seg.audio_derivative, []).append(seg)
+            if seg.duration >= min_duration_sec:
+                grouped.setdefault(seg.audio_derivative, []).append(seg)
 
-    if invalid_json:
-        raise ValueError(
-            "Metadata expects only *_std_nml_vad.json inputs, got: "
-            + ", ".join(invalid_json[:5])
+    groups: list[SpeakerGroup] = []
+    for key in sorted(grouped):
+        segments = sorted(grouped[key], key=lambda seg: (seg.orig_start, seg.segment_index))
+        groups.append(
+            SpeakerGroup(
+                key=key,
+                segments=segments,
+                total_active_duration=sum(seg.duration for seg in segments),
+            )
         )
-
-    return [
-        SpeakerGroup(
-            key=key,
-            segments=ordered,
-            total_active_duration=sum(seg.duration for seg in ordered),
-        )
-        for key, ordered in (
-            (key, sorted(grouped[key], key=lambda seg: (seg.orig_start, seg.segment_index)))
-            for key in sorted(grouped)
-        )
-    ]
-
-
-def clamp_ratio(value: float) -> float:
-    return max(0.0, min(1.0, value))
+    return groups
 
 
 def sample_overlap_ratio(rng: random.Random, center: float, offset: float) -> float:
-    low = clamp_ratio(center - offset)
-    high = clamp_ratio(center + offset)
-    return rng.uniform(low, high)
+    return rng.uniform(max(0.0, min(1.0, center - offset)), max(0.0, min(1.0, center + offset)))
 
 
-def weighted_sample_without_replacement(
+def weighted_choice_without_replacement(
     items: list[SpeakerGroup],
     count: int,
     rng: random.Random,
@@ -176,251 +137,78 @@ def weighted_sample_without_replacement(
         weights = [max(item.total_active_duration, 0.0) for item in pool]
         total = sum(weights)
         if total <= 0:
-            index = rng.randrange(len(pool))
-        else:
-            target = rng.random() * total
-            acc = 0.0
-            index = len(pool) - 1
-            for i, weight in enumerate(weights):
-                acc += weight
-                if acc >= target:
-                    index = i
-                    break
+            chosen.append(pool.pop(rng.randrange(len(pool))))
+            continue
+
+        target = rng.random() * total
+        acc = 0.0
+        index = len(pool) - 1
+        for i, weight in enumerate(weights):
+            acc += weight
+            if acc >= target:
+                index = i
+                break
         chosen.append(pool.pop(index))
     return chosen
 
 
-def _make_source_record(
-    uri: str,
-    source_name: str,
-    seg: ActiveSegment,
-    speaker_label: str,
-    mix_start: float,
-    mix_end: float,
-    gain_db: float,
-) -> dict[str, Any]:
+def build_source(seg: ActiveSegment, speaker: str, idx: int, start: float, end: float, gain_db: float) -> dict[str, Any]:
     return {
-        "source": source_name,
+        "source": f"s{idx}",
         "source_id": seg.source_id,
         "audio": seg.audio,
         "audio_derivative": seg.audio_derivative,
         "speaker_id": seg.speaker_id,
         "segment_index": seg.segment_index,
-        "speaker": speaker_label,
+        "speaker": speaker,
         "orig_start": round(seg.orig_start, 6),
         "orig_end": round(seg.orig_end, 6),
         "orig_duration": round(seg.duration, 6),
-        "mix_start": round(mix_start, 6),
-        "mix_end": round(mix_end, 6),
+        "mix_start": round(start, 6),
+        "mix_end": round(end, 6),
         "mix_duration": round(seg.duration, 6),
         "gain_db": round(gain_db, 3),
     }
 
 
-def _find_fitting_segment(
+def find_fit(
     queue: list[ActiveSegment],
-    prev_source: dict[str, Any] | None,
-    current_end: float,
+    prev: dict[str, Any] | None,
     same_speaker: bool,
     overlap_center: float,
     overlap_offset: float,
     max_duration: float,
-    same_speaker_gap: float,
     rng: random.Random,
-    ratio_tries: int = STEP_4_RATIO_TRIES,
 ) -> tuple[int, float, float, float | None] | None:
-    same_speaker_gap_sec = same_speaker_gap / 1000.0
     if same_speaker:
-        base_start = prev_source["mix_end"] + same_speaker_gap_sec if prev_source is not None else current_end
-        for idx, seg in enumerate(queue):
-            mix_end = base_start + seg.duration
-            if mix_end <= max_duration:
-                return idx, base_start, mix_end, None
+        start = prev["mix_end"] + (STEP_4_SAME_SPEAKER_GAP / 1000.0)
+        for i, seg in enumerate(queue):
+            end = start + seg.duration
+            if end <= max_duration:
+                return i, start, end, None
         return None
 
-    prev_duration = float(prev_source["orig_duration"]) if prev_source is not None else 0.0
-    prev_end = float(prev_source["mix_end"]) if prev_source is not None else current_end
-
-    for idx, seg in enumerate(queue):
-        for _ in range(ratio_tries):
+    prev_end = float(prev["mix_end"]) if prev is not None else STEP_4_PRE_SILENCE / 1000.0
+    prev_duration = float(prev["orig_duration"]) if prev is not None else 0.0
+    for i, seg in enumerate(queue):
+        for _ in range(STEP_4_RATIO_TRIES):
             ratio = sample_overlap_ratio(rng, overlap_center, overlap_offset)
             overlap = ratio * min(prev_duration, seg.duration)
-            mix_start = prev_end - overlap
-            mix_end = mix_start + seg.duration
-            if mix_end <= max_duration:
-                return idx, mix_start, mix_end, ratio
-
+            start = prev_end - overlap
+            end = start + seg.duration
+            if end <= max_duration:
+                return i, start, end, ratio
     return None
 
 
-def _build_sources_from_groups(
-    uri: str,
-    groups: list[SpeakerGroup],
-    rng: random.Random,
-    overlap_center: float,
-    overlap_offset: float,
-    min_mixture_duration: float,
-    max_mixture_duration: float,
-    max_speakers_per_frame: int,
-    gain_db_range: tuple[float, float] = STEP_4_GAIN_DB_RANGE,
-) -> dict[str, Any] | None:
-    if len(groups) < 2:
-        return None
-
-    min_mixture_duration_sec = min_mixture_duration / 1000.0
-    max_mixture_duration_sec = max_mixture_duration / 1000.0
-
-    queues: dict[str, list[ActiveSegment]] = {group.key: list(group.segments) for group in groups}
-    for queue in queues.values():
-        rng.shuffle(queue)
-
-    order = [group.key for group in groups]
-    label_order = list(order)
-    rng.shuffle(label_order)
-    label_map = {key: f"{uri}_spk{i + 1}" for i, key in enumerate(label_order)}
-
-    sources: list[dict[str, Any]] = []
-    overlaps: list[dict[str, Any]] = []
-    used_speakers: set[str] = set()
-    blocked: set[str] = set()
-
-    current_end = STEP_4_PRE_SILENCE / 1000.0
-    prev_source: dict[str, Any] | None = None
-    prev_key: str | None = None
-
-    while True:
-        final_duration = current_end + (STEP_4_POST_SILENCE / 1000.0)
-        speaker_count = len(used_speakers)
-        if speaker_count >= 2 and final_duration >= min_mixture_duration_sec:
-            break
-
-        available = {key for key in order if queues.get(key) and key not in blocked}
-        if not available:
-            break
-
-        candidates = [key for key in available if key != prev_key]
-        next_key = rng.choice(candidates or list(available))
-        if next_key is None:
-            break
-
-        same_speaker = prev_key is not None and next_key == prev_key
-        if same_speaker and len(available) > 1:
-            blocked.add(next_key)
-            continue
-
-        queue = queues[next_key]
-        fit = _find_fitting_segment(
-            queue=queue,
-            prev_source=prev_source,
-            current_end=current_end,
-            same_speaker=same_speaker,
-            overlap_center=overlap_center,
-            overlap_offset=overlap_offset,
-            max_duration=max_mixture_duration_sec,
-            same_speaker_gap=STEP_4_SAME_SPEAKER_GAP,
-            rng=rng,
-            ratio_tries=STEP_4_RATIO_TRIES,
-        )
-        if fit is None:
-            blocked.add(next_key)
-            continue
-
-        idx, mix_start, mix_end, ratio = fit
-        seg = queue.pop(idx)
-        gain_db = rng.uniform(*gain_db_range)
-        source_name = f"s{len(sources) + 1}"
-        source = _make_source_record(uri, source_name, seg, label_map[next_key], mix_start, mix_end, gain_db)
-        sources.append(source)
-        used_speakers.add(next_key)
-
-        if prev_source is not None:
-            prev_end = float(prev_source["mix_end"])
-            curr_start = float(source["mix_start"])
-            curr_end = float(source["mix_end"])
-            overlap_start = max(float(prev_source["mix_start"]), curr_start)
-            overlap_end = min(prev_end, curr_end)
-            overlap_duration = max(0.0, overlap_end - overlap_start)
-            prev_duration = float(prev_source["orig_duration"])
-            curr_duration = float(source["orig_duration"])
-            denom = min(prev_duration, curr_duration)
-            overlaps.append(
-                {
-                    "between": [prev_source["source"], source["source"]],
-                    "start": round(overlap_start, 6),
-                    "end": round(overlap_end, 6),
-                    "duration": round(overlap_duration, 6),
-                    "ratio_target": ratio,
-                    "ratio_actual": round(overlap_duration / denom, 6) if denom > 0 else None,
-                }
-            )
-        prev_source = source
-        prev_key = next_key
-        current_end = float(source["mix_end"])
-
-    speaker_labels = [label_map[key] for key in order if any(src["speaker"] == label_map[key] for src in sources)]
-    speaker_ids = sorted(
-        {
-            src["speaker_id"]
-            for src in sources
-            if src["speaker_id"] not in (None, "")
-        }
-    )
-
-    if len(sources) < 2 or len(speaker_labels) < 2:
-        return None
-
-    mix_end = max(float(src["mix_end"]) for src in sources)
-    if mix_end > max_mixture_duration_sec:
-        return None
-
-    global_overlap, ok = compute_global_overlap(sources, max_speakers_per_frame)
-    if not ok:
-        return None
-
-    pre_silence = round(STEP_4_PRE_SILENCE, 6)
-    post_silence = round(STEP_4_POST_SILENCE, 6)
-    duration = round(mix_end + (post_silence / 1000.0), 6)
-    if duration < min_mixture_duration_sec or duration > max_mixture_duration_sec:
-        return None
-
-    return {
-        "uri": uri,
-        "sample_rate": STEP_4_SAMPLE_RATE,
-        "duration": duration,
-        "overlap_ratio_center": overlap_center,
-        "overlap_ratio_offset": overlap_offset,
-        "pre_silence": pre_silence,
-        "post_silence": post_silence,
-        "max_speakers": STEP_4_MAX_SPEAKERS,
-        "max_speakers_per_frame": STEP_4_MAX_SPEAKERS_PER_FRAME,
-        "max_number_speaker": STEP_4_MAX_SPEAKERS,
-        "max_overlap_speaker": STEP_4_MAX_SPEAKERS_PER_FRAME,
-        "speaker_count": len(speaker_labels),
-        "speaker_labels": speaker_labels,
-        "speaker_ids": speaker_ids,
-        "source_count": len(sources),
-        "sources": sources,
-        "overlap": overlaps,
-        "global_overlap": global_overlap,
-    }
-
-
-def compute_global_overlap(
-    sources: list[dict[str, Any]],
-    max_speakers_per_frame: int,
-) -> tuple[list[dict[str, Any]], bool]:
+def compute_global_overlap(sources: list[dict[str, Any]], max_speakers_per_frame: int) -> tuple[list[dict[str, Any]], bool]:
     events: list[tuple[float, int, str, str]] = []
     for src in sources:
-        start = float(src["mix_start"])
-        end = float(src["mix_end"])
-        speaker = str(src["speaker"])
-        source_id = str(src["source"])
-        events.append((start, 1, speaker, source_id))
-        events.append((end, 0, speaker, source_id))
+        events.append((float(src["mix_start"]), 1, str(src["speaker"]), str(src["source"])))
+        events.append((float(src["mix_end"]), 0, str(src["speaker"]), str(src["source"])))
 
     events.sort(key=lambda item: (item[0], item[1]))
-
-    active = Counter[str]()
+    active = Counter()
     intervals: list[dict[str, Any]] = []
     prev_time: float | None = None
 
@@ -447,7 +235,6 @@ def compute_global_overlap(
                 active[source_id] -= 1
         else:
             active[source_id] += 1
-
         prev_time = time
 
     return intervals, True
@@ -457,8 +244,8 @@ def build_candidate_mixture(
     uri: str,
     groups: list[SpeakerGroup],
     rng: random.Random,
-    overlap_center: float = STEP_4_OVERLAP_CENTER,
-    overlap_offset: float = STEP_4_OVERLAP_OFFSET,
+    overlap_center: float = STEP_4_OVERLAP_RATIO,
+    overlap_offset: float = STEP_4_OVERLAP_RANDOM_OFFSET,
     min_mixture_duration: float = STEP_4_MIN_MIXTURE_DURATION,
     max_mixture_duration: float = STEP_4_MAX_MIXTURE_DURATION,
     max_speakers: int = STEP_4_MAX_SPEAKERS,
@@ -467,57 +254,133 @@ def build_candidate_mixture(
     if len(groups) < 2:
         return None
 
-    ordered = weighted_sample_without_replacement(groups, 2, rng)
-    min_mixture_duration_sec = min_mixture_duration / 1000.0
+    min_mix_sec = min_mixture_duration / 1000.0
+    max_mix_sec = max_mixture_duration / 1000.0
+    ordered = weighted_choice_without_replacement(groups, 2, rng)
 
-    def add_next_group() -> bool:
+    def add_group() -> bool:
         remaining = [group for group in groups if group.key not in {item.key for item in ordered}]
         if not remaining:
             return False
-        ordered.append(weighted_sample_without_replacement(remaining, 1, rng)[0])
+        ordered.append(weighted_choice_without_replacement(remaining, 1, rng)[0])
         return True
 
     while True:
-        total_active = sum(group.total_active_duration for group in ordered)
-        need_more_speakers = total_active < min_mixture_duration_sec and len(ordered) < min(max_speakers, len(groups))
+        if sum(group.total_active_duration for group in ordered) >= min_mix_sec and len(ordered) >= 2:
+            break
+        if len(ordered) >= min(max_speakers, len(groups)) or not add_group():
+            break
 
-        if need_more_speakers:
-            if not add_next_group():
-                break
+    queues = {group.key: list(group.segments) for group in ordered}
+    for queue in queues.values():
+        rng.shuffle(queue)
+
+    keys = [group.key for group in ordered]
+    speaker_keys = list(keys)
+    rng.shuffle(speaker_keys)
+    labels = {key: f"{uri}_spk{i + 1}" for i, key in enumerate(speaker_keys)}
+
+    sources: list[dict[str, Any]] = []
+    overlaps: list[dict[str, Any]] = []
+    used: set[str] = set()
+    blocked: set[str] = set()
+    current_end = STEP_4_PRE_SILENCE / 1000.0
+    prev_source: dict[str, Any] | None = None
+    prev_key: str | None = None
+
+    while True:
+        if len(used) >= 2 and current_end + (STEP_4_POST_SILENCE / 1000.0) >= min_mix_sec:
+            break
+
+        available = [key for key in keys if queues.get(key) and key not in blocked]
+        if not available:
+            break
+
+        candidates = [key for key in available if key != prev_key] or available
+        key = rng.choice(candidates)
+        if prev_key is not None and key == prev_key and len(available) > 1:
+            blocked.add(key)
             continue
 
-        record = _build_sources_from_groups(
-            uri=uri,
-            groups=ordered,
-            rng=rng,
+        fit = find_fit(
+            queue=queues[key],
+            prev=prev_source,
+            same_speaker=prev_key is not None and key == prev_key,
             overlap_center=overlap_center,
             overlap_offset=overlap_offset,
-            min_mixture_duration=min_mixture_duration,
-            max_mixture_duration=max_mixture_duration,
-            max_speakers_per_frame=max_speakers_per_frame,
+            max_duration=max_mix_sec,
+            rng=rng,
         )
-        if record is None:
-            if len(ordered) >= min(max_speakers, len(groups)):
-                return None
-            if not add_next_group():
-                return None
+        if fit is None:
+            blocked.add(key)
             continue
 
-        if record["duration"] >= min_mixture_duration_sec:
-            return record
+        idx, start, end, ratio = fit
+        seg = queues[key].pop(idx)
+        source = build_source(seg, labels[key], len(sources) + 1, start, end, rng.uniform(*STEP_4_GAIN_DB_RANGE))
+        sources.append(source)
+        used.add(key)
 
-        if len(ordered) >= min(max_speakers, len(groups)):
-            return None
-        if not add_next_group():
-            return None
+        if prev_source is not None:
+            overlap_start = max(float(prev_source["mix_start"]), float(source["mix_start"]))
+            overlap_end = min(float(prev_source["mix_end"]), float(source["mix_end"]))
+            overlap_duration = max(0.0, overlap_end - overlap_start)
+            denom = min(float(prev_source["orig_duration"]), float(source["orig_duration"]))
+            overlaps.append(
+                {
+                    "between": [prev_source["source"], source["source"]],
+                    "start": round(overlap_start, 6),
+                    "end": round(overlap_end, 6),
+                    "duration": round(overlap_duration, 6),
+                    "ratio_target": ratio,
+                    "ratio_actual": round(overlap_duration / denom, 6) if denom > 0 else None,
+                }
+            )
 
-    return None
+        prev_source = source
+        prev_key = key
+        current_end = float(source["mix_end"])
+
+    if len(sources) < 2 or len(used) < 2:
+        return None
+
+    mix_end = max(float(src["mix_end"]) for src in sources)
+    duration = round(mix_end + (STEP_4_POST_SILENCE / 1000.0), 6)
+    if mix_end > max_mix_sec or not (min_mix_sec <= duration <= max_mix_sec):
+        return None
+
+    global_overlap, ok = compute_global_overlap(sources, max_speakers_per_frame)
+    if not ok:
+        return None
+
+    speaker_labels = [labels[key] for key in keys if key in used]
+    speaker_ids = sorted({src["speaker_id"] for src in sources if src["speaker_id"] not in (None, "")})
+
+    return {
+        "uri": uri,
+        "sample_rate": STEP_1_AUDIO_SAMPLE_RATE,
+        "duration": duration,
+        "overlap_ratio_center": overlap_center,
+        "overlap_ratio_offset": overlap_offset,
+        "pre_silence": round(STEP_4_PRE_SILENCE, 6),
+        "post_silence": round(STEP_4_POST_SILENCE, 6),
+        "max_speakers": STEP_4_MAX_SPEAKERS,
+        "max_speakers_per_frame": STEP_4_MAX_SPEAKERS_PER_FRAME,
+        "max_number_speaker": STEP_4_MAX_SPEAKERS,
+        "max_overlap_speaker": STEP_4_MAX_SPEAKERS_PER_FRAME,
+        "speaker_count": len(speaker_labels),
+        "speaker_labels": speaker_labels,
+        "speaker_ids": speaker_ids,
+        "source_count": len(sources),
+        "sources": sources,
+        "overlap": overlaps,
+        "global_overlap": global_overlap,
+    }
 
 
 def write_json(items: list[dict[str, Any]], path: Path, force: bool = False) -> None:
     if path.exists() and not force:
         raise FileExistsError(f"{path} already exists. Use --force to overwrite.")
-
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
@@ -526,37 +389,19 @@ def write_json(items: list[dict[str, Any]], path: Path, force: bool = False) -> 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate VAD-based mixture metadata.")
-    parser.add_argument("--vad-dir", type=Path, required=True, help=STEP_4_INPUT_HELP)
+    parser.add_argument("--vad-dir", type=Path, required=True, help="Path to _std_nml_vad.json files produced by step_3_vad.py.")
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--n-mixtures", type=int, default=STEP_4_N_MIXTURES)
-    parser.add_argument(
-        "--overlap-ratios",
-        type=float,
-        nargs=2,
-        metavar=("CENTER", "OFFSET"),
-        default=(STEP_4_OVERLAP_CENTER, STEP_4_OVERLAP_OFFSET),
-        help="Center and random offset for overlap ratio. Example: 0.4 0.1 -> uniform(0.3, 0.5).",
-    )
+    parser.add_argument("--n-mixtures", type=int, required=True)
+    parser.add_argument("--overlap-ratio", type=float, default=STEP_4_OVERLAP_RATIO, help="Center overlap ratio.")
+    parser.add_argument("--overlap-random-offset", type=float, default=STEP_4_OVERLAP_RANDOM_OFFSET, help="Random offset around overlap ratio.")
     parser.add_argument("--min-segment-duration", dest="min_segment_duration", type=float, default=STEP_4_MIN_SEGMENT_DURATION, help="Minimum active segment duration (ms).")
     parser.add_argument("--min-mixture-duration", type=float, default=STEP_4_MIN_MIXTURE_DURATION, help="Minimum mixture duration (ms).")
     parser.add_argument("--max-mixture-duration", type=float, default=STEP_4_MAX_MIXTURE_DURATION, help="Maximum mixture duration (ms).")
     parser.add_argument("--seed", type=int, default=STEP_4_SEED)
-    parser.add_argument("--prefix", type=str, default=STEP_4_PREFIX)
+    parser.add_argument("--prefix", type=str, default="mix")
     parser.add_argument("--max-build-trials", type=int, default=STEP_4_MAX_BUILD_TRIALS)
-    parser.add_argument(
-        "--max-speakers",
-        "--max-number-speaker",
-        dest="max_speakers",
-        type=int,
-        default=STEP_4_MAX_SPEAKERS,
-    )
-    parser.add_argument(
-        "--max-speakers-per-frame",
-        "--max-overlap-speaker",
-        dest="max_speakers_per_frame",
-        type=int,
-        default=STEP_4_MAX_SPEAKERS_PER_FRAME,
-    )
+    parser.add_argument("--max-speakers", "--max-number-speaker", dest="max_speakers", type=int, default=STEP_4_MAX_SPEAKERS)
+    parser.add_argument("--max-speakers-per-frame", dest="max_speakers_per_frame", type=int, default=STEP_4_MAX_SPEAKERS_PER_FRAME)
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
 
@@ -568,8 +413,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--max-mixture-duration must be >= --min-mixture-duration.")
     if args.min_segment_duration < 0:
         raise ValueError("--min-segment-duration must be non-negative.")
-    if args.overlap_ratios[1] < 0:
-        raise ValueError("--overlap-ratios OFFSET must be non-negative.")
+    if args.overlap_random_offset < 0:
+        raise ValueError("--overlap-random-offset must be non-negative.")
     if args.max_speakers < 2:
         raise ValueError("--max-speakers must be at least 2.")
     if args.max_speakers_per_frame < 1:
@@ -580,16 +425,11 @@ def main() -> None:
     args = parse_args()
     validate_args(args)
 
-    rng = random.Random(args.seed)
-    groups = collect_groups(
-        vad_root=args.vad_dir,
-        min_duration=args.min_segment_duration,
-    )
+    groups = collect_groups(args.vad_dir, args.min_segment_duration)
     if len(groups) < 2:
         raise RuntimeError("Need at least two speaker groups.")
 
-    overlap_center, overlap_offset = args.overlap_ratios
-
+    rng = random.Random(args.seed)
     mixtures: list[dict[str, Any]] = []
     attempts = 0
     while len(mixtures) < args.n_mixtures:
@@ -597,13 +437,12 @@ def main() -> None:
         if attempts > args.max_build_trials:
             raise RuntimeError(f"Only generated {len(mixtures)} mixtures after {args.max_build_trials} attempts.")
 
-        uri = f"{args.prefix}_{len(mixtures):08d}"
         record = build_candidate_mixture(
-            uri=uri,
+            uri=f"{args.prefix}_{len(mixtures):08d}",
             groups=groups,
             rng=rng,
-            overlap_center=overlap_center,
-            overlap_offset=overlap_offset,
+            overlap_center=args.overlap_ratio,
+            overlap_offset=args.overlap_random_offset,
             min_mixture_duration=args.min_mixture_duration,
             max_mixture_duration=args.max_mixture_duration,
             max_speakers=args.max_speakers,
@@ -613,14 +452,8 @@ def main() -> None:
             mixtures.append(record)
 
     write_json(mixtures, args.out, force=args.force)
-    usage_counts = Counter(
-        name
-        for mixture in mixtures
-        for name in {
-            str(source["audio_derivative"])
-            for source in mixture.get("sources", [])
-        }
-    )
+    usage_counts = Counter(name for mixture in mixtures for name in {src["audio_derivative"] for src in mixture["sources"]})
+
     print(f"Loaded active segments: {sum(len(group.segments) for group in groups)}")
     print(f"Loaded speaker groups: {len(groups)}")
     print(f"Wrote mixtures: {len(mixtures)}")

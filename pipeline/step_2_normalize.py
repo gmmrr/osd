@@ -29,13 +29,6 @@ from config.params import (
     STEP_2_NORMALIZE_LIMIT_DB,
 )
 
-KEY_STD = "std"
-KEY_NORM = "nml"
-EXT_WAV = ".wav"
-NORMALIZE_WAV_SUBTYPE = "PCM_16"
-NORMALIZE_INPUTS = ["std"]
-NORMALIZE_RAISE_ON_MISSING_INPUT = True
-
 
 def loudness_normalize(
     y: np.ndarray,
@@ -54,10 +47,10 @@ def loudness_normalize(
 
     meter = pyln.Meter(sample_rate)
     measured_lufs = float(meter.integrated_loudness(y))
-    if np.isnan(measured_lufs) or np.isinf(measured_lufs):
+    if not np.isfinite(measured_lufs):
         return y, 0.0
 
-    gain_db = float(np.clip(target_dbfs - measured_lufs, -limit_db, limit_db))
+    gain_db = max(-limit_db, min(limit_db, target_dbfs - measured_lufs))
     factor = 10 ** (gain_db / 20)
     normalized = y * factor
 
@@ -73,20 +66,20 @@ def normalize_single_audio(
     force: bool = False,
 ) -> Path:
     input_file = Path(input_file)
-    if not input_file.name.endswith(f"_{KEY_STD}{EXT_WAV}"):
+    if not input_file.name.endswith("_std.wav"):
         raise ValueError(f"Normalize expects *_std.wav input, got: {input_file.name}")
 
-    out_path = input_file.with_name(f"{input_file.stem}_{KEY_NORM}{EXT_WAV}")
+    out_path = input_file.with_name(f"{input_file.stem}_nml.wav")
     if out_path.exists() and not force:
         print(f"↪ {input_file.name}: normalized file already exists (cached)")
         return out_path
 
     y, sr = sf.read(str(input_file), always_2d=True, dtype="float32")
-    y = y.mean(axis=1).astype(np.float32, copy=False)
+    y = y.mean(axis=1)
 
     if sr != STEP_1_AUDIO_SAMPLE_RATE:
         g = math.gcd(STEP_1_AUDIO_SAMPLE_RATE, sr)
-        y = scipy.signal.resample_poly(y, STEP_1_AUDIO_SAMPLE_RATE // g, sr // g).astype(np.float32, copy=False)
+        y = scipy.signal.resample_poly(y, STEP_1_AUDIO_SAMPLE_RATE // g, sr // g)
         sr = STEP_1_AUDIO_SAMPLE_RATE
 
     y, gain_db = loudness_normalize(
@@ -96,7 +89,7 @@ def normalize_single_audio(
         limit_db=STEP_2_NORMALIZE_LIMIT_DB,
     )
 
-    sf.write(out_path, y, sr, subtype=NORMALIZE_WAV_SUBTYPE)
+    sf.write(out_path, y, sr, subtype="PCM_16")
     print(f"Normalized: {input_file.name} -> {out_path.name} ({gain_db:+.2f} LU, {sr} Hz, mono, LUFS)")
     return out_path
 
@@ -109,19 +102,11 @@ def run_normalize_dir(
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
 
-    input_files = []
-    invalid_files = []
-    for path in sorted(input_dir.iterdir()):
-        if not path.is_file():
-            continue
-        if path.suffix.lower() != EXT_WAV:
-            continue
-        if path.name.endswith(f"_{KEY_STD}{EXT_WAV}"):
-            input_files.append(path)
-        else:
-            invalid_files.append(path.name)
+    paths = [path for path in sorted(input_dir.iterdir()) if path.is_file() and path.suffix.lower() == ".wav"]
+    input_files = [path for path in paths if path.name.endswith("_std.wav")]
+    invalid_files = [path.name for path in paths if not path.name.endswith("_std.wav")]
     if invalid_files:
-        raise ValueError(f"Normalize expects only *_{KEY_STD}{EXT_WAV} inputs, got: {', '.join(invalid_files[:5])}")
+        raise ValueError(f"Normalize expects only *_std.wav inputs, got: {', '.join(invalid_files[:5])}")
     if not input_files:
         print(f"⚠️  No standardized files found in: {input_dir}")
         return
