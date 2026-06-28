@@ -19,12 +19,10 @@ from PySide6.QtMultimedia import QAudioDevice, QAudioOutput, QMediaDevices, QMed
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
-    QSizePolicy,
     QSlider,
     QToolButton,
     QVBoxLayout,
@@ -386,13 +384,45 @@ class OSDVisualizationWindow(QMainWindow):
         controls_layout.setContentsMargins(0, 0, 0, 0)
         controls_layout.setSpacing(10)
         self.play_button = QPushButton("Play")
+        self.play_button.setCursor(Qt.PointingHandCursor)
         self.play_button.clicked.connect(self._toggle_playback)
+        self.play_button.setStyleSheet(
+            "QPushButton {"
+            "background-color: #111827; color: white; padding: 8px 16px;"
+            "border: none; border-radius: 10px; font-weight: 700;"
+            "}"
+            "QPushButton:hover { background-color: #1f2937; }"
+        )
         controls_layout.addWidget(self.play_button)
         self.time_label = QLabel("00:00.000 / 00:00.000")
+        self.time_label.setStyleSheet("font-size: 12px; color: #374151; min-width: 140px;")
         controls_layout.addWidget(self.time_label)
         self.position_slider = QSlider(Qt.Horizontal)
         self.position_slider.setRange(0, 0)
         self.position_slider.sliderMoved.connect(self._seek_to_slider)
+        self.position_slider.setStyleSheet(
+            """
+            QSlider::groove:horizontal {
+                height: 6px;
+                background: #e5e7eb;
+                border-radius: 3px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #111827;
+                border-radius: 3px;
+            }
+            QSlider::add-page:horizontal {
+                background: #d1d5db;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #111827;
+                width: 14px;
+                margin: -5px 0;
+                border-radius: 7px;
+            }
+            """
+        )
         controls_layout.addWidget(self.position_slider, 1)
         root_layout.addWidget(controls)
 
