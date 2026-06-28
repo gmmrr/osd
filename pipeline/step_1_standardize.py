@@ -8,7 +8,6 @@ import argparse
 import math
 import sys
 from pathlib import Path
-
 import numpy as np
 import scipy.signal
 import soundfile as sf
@@ -17,7 +16,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from config.params import STEP_1_AUDIO_SAMPLE_RATE
+from config.params import (
+    STEP_1_AUDIO_SAMPLE_RATE
+)
 
 
 def standardize_single_audio(input_file: Path, force: bool = False) -> Path:

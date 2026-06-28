@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# --- MIX ---
 
 from __future__ import annotations
 
@@ -9,7 +10,6 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
-
 import numpy as np
 import soundfile as sf
 
@@ -19,11 +19,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from config.params import (
     STEP_1_AUDIO_SAMPLE_RATE,
-    STEP_5_SPLITS,
     STEP_5_TRAIN_RATIO,
     STEP_5_DEV_RATIO,
     STEP_5_TEST_RATIO,
 )
+SPLITS = ("train", "dev", "test")
 
 
 def load_mix_records(path: Path) -> list[dict[str, Any]]:
@@ -220,7 +220,7 @@ def write_split_files(dataset_root: Path, records: list[dict[str, Any]], force: 
     uem_dir = dataset_root / "uem"
     lists_dir = dataset_root / "lists"
 
-    split_records: dict[str, list[dict[str, Any]]] = {split: [] for split in STEP_5_SPLITS}
+    split_records: dict[str, list[dict[str, Any]]] = {split: [] for split in SPLITS}
     for record in records:
         split = split_key(record)
         split_records[split].append(record)

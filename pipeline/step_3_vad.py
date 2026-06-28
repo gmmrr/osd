@@ -11,7 +11,6 @@ import math
 import sys
 from pathlib import Path
 from typing import Any
-
 import numpy as np
 import scipy.signal
 import soundfile as sf
@@ -34,7 +33,6 @@ from config.params import (
     STEP_3_VAD_RMS_FRAME,
     STEP_3_VAD_RMS_HOP,
 )
-
 VAD_MODEL_NAME = "RMS-Energy-VAD"
 
 

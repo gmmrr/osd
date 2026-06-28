@@ -8,16 +8,10 @@ import argparse
 import math
 import sys
 from pathlib import Path
-
 import numpy as np
 import scipy.signal
 import soundfile as sf
-
-try:
-    import pyloudnorm as pyln
-except ImportError as exc:  # pragma: no cover - dependency guard
-    pyln = None
-    _PYLOUDNORM_IMPORT_ERROR = exc
+import pyloudnorm as pyln
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
