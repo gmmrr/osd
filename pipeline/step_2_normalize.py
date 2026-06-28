@@ -42,11 +42,6 @@ def loudness_normalize(
     Returns:
         A tuple of (normalized waveform, applied gain in dB).
     """
-    if pyln is None:
-        raise RuntimeError(
-            "pyloudnorm is required for LUFS normalization. "
-            "Install it with: uv pip install pyloudnorm"
-        ) from _PYLOUDNORM_IMPORT_ERROR
 
     if y.size == 0 or np.allclose(y, 0):
         return y, 0.0
