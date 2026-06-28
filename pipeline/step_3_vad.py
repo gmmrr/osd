@@ -309,7 +309,6 @@ def vad_single_audio(
     vad_pad: int,
     out_suffix: str | None = None,
     out_dir: Path | None = None,
-    quiet: bool = True,
     force: bool = False,
 ) -> Path:
     """
@@ -323,7 +322,6 @@ def vad_single_audio(
         vad_pad: Padding around detected segments in milliseconds.
         out_suffix: Optional suffix appended to the output JSON filename.
         out_dir: Optional output directory. Defaults to the input directory.
-        quiet: Suppress per-file logging when True.
         force: Overwrite cached outputs when True.
 
     Returns:
@@ -335,8 +333,7 @@ def vad_single_audio(
     target_dir.mkdir(parents=True, exist_ok=True)
     out_path = target_dir / f"{audio_path.stem}_vad{suffix}.json"
     if out_path.exists() and not force:
-        if not quiet:
-            print(f"↪ {audio_path.name}: VAD json already exists (cached)")
+        print(f"↪ {audio_path.name}: VAD json already exists (cached)")
         return out_path
 
     wav_cpu, sr = _load_audio(audio_path)
@@ -412,8 +409,7 @@ def vad_single_audio(
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
-    if not quiet:
-        print(f"VAD: {audio_path.name} -> {out_path.name}")
+    print(f"VAD: {audio_path.name} -> {out_path.name}")
     return out_path
 
 
@@ -426,7 +422,6 @@ def run_vad_dir(
     force: bool = False,
     out_suffix: str | None = None,
     out_dir: Path | None = None,
-    quiet: bool = True,
 ) -> None:
     """
     Step 3: Run VAD on every matching WAV file in a directory.
@@ -440,7 +435,6 @@ def run_vad_dir(
         force: Overwrite cached outputs when True.
         out_suffix: Optional suffix appended to every output JSON filename.
         out_dir: Optional output directory. Defaults to the input directory.
-        quiet: Suppress per-file logging when True.
     """
     input_dir = Path(input_dir)
     if not input_dir.exists():
@@ -451,10 +445,9 @@ def run_vad_dir(
         print(f"⚠️  No .wav files found in: {input_dir}")
         return
 
-    if not quiet:
-        print(f"🚀 VAD in '{input_dir}'")
-        print(f"   • Device: cpu")
-        print(f"   • Files: {len(input_files)}")
+    print(f"🚀 VAD in '{input_dir}'")
+    print(f"   • Device: cpu")
+    print(f"   • Files: {len(input_files)}")
 
     for file in input_files:
         vad_single_audio(
@@ -465,12 +458,10 @@ def run_vad_dir(
             vad_pad=vad_pad,
             out_suffix=out_suffix,
             out_dir=out_dir,
-            quiet=quiet,
             force=force,
         )
 
-    if not quiet:
-        print("✅ VAD completed.")
+    print("✅ VAD completed.")
 
 
 def parse_args() -> argparse.Namespace:
