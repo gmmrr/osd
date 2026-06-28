@@ -9,9 +9,9 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
-import librosa
 import numpy as np
 import pyqtgraph as pg
+import scipy.signal
 import soundfile as sf
 from PySide6.QtCore import QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent
@@ -32,7 +32,6 @@ from PySide6.QtWidgets import (
 
 DEFAULT_WAVEFORM_SAMPLE_RATE = 16_000
 DEFAULT_WAVEFORM_POINTS = 5_000
-DEFAULT_AUDIO_SUFFIX = ".wav"
 GT_OVERLAP_COLOR = "#f59e0b"
 HYP_OVERLAP_COLOR = "#ef4444"
 PALETTE = ["#ff0000", "#00a000", "#0057ff", "#00c7d9", "#ff00c8", "#ffd400", "#7a4cff", "#00b894"]
@@ -68,7 +67,7 @@ def discover_audio_paths(root: Path) -> list[Path]:
     audio_dir = root / "audio"
     if not audio_dir.exists():
         raise FileNotFoundError(f"Missing audio directory under: {root}")
-    paths = sorted(path.resolve() for path in audio_dir.glob(f"*{DEFAULT_AUDIO_SUFFIX}") if path.is_file())
+    paths = sorted(path.resolve() for path in audio_dir.glob("*.wav") if path.is_file())
     if not paths:
         raise FileNotFoundError(f"No audio files found under: {audio_dir}")
     return paths
@@ -153,15 +152,12 @@ def sort_speaker_labels(speakers: list[str]) -> list[str]:
 
 
 def load_waveform(audio_path: Path, sample_rate: int, max_points: int) -> tuple[np.ndarray, np.ndarray]:
-    try:
-        data, sr = sf.read(str(audio_path), always_2d=True, dtype="float32")
-        waveform = data.mean(axis=1).astype(np.float32, copy=False)
-    except Exception:
-        waveform, sr = librosa.load(str(audio_path), sr=None, mono=True)
-        waveform = waveform.astype(np.float32, copy=False)
+    data, sr = sf.read(str(audio_path), always_2d=True, dtype="float32")
+    waveform = data.mean(axis=1).astype(np.float32, copy=False)
 
     if sr != sample_rate and waveform.size > 0:
-        waveform = librosa.resample(waveform, orig_sr=sr, target_sr=sample_rate).astype(np.float32, copy=False)
+        g = math.gcd(sample_rate, sr)
+        waveform = scipy.signal.resample_poly(waveform, sample_rate // g, sr // g).astype(np.float32, copy=False)
         sr = sample_rate
 
     duration = float(waveform.size) / float(sr) if sr > 0 else 0.0

@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import librosa
 import numpy as np
 import pyqtgraph as pg
+import scipy.signal
 import soundfile as sf
 from PySide6.QtCore import QUrl, Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QMouseEvent
@@ -205,15 +205,12 @@ def load_audio_waveform(
     if not audio_path.exists():
         raise FileNotFoundError(f"Audio file does not exist: {audio_path}")
 
-    try:
-        data, sr = sf.read(str(audio_path), always_2d=True)
-        waveform = data.mean(axis=1).astype(np.float32, copy=False)
-    except Exception:
-        waveform, sr = librosa.load(str(audio_path), sr=None, mono=True)
-        waveform = waveform.astype(np.float32, copy=False)
+    data, sr = sf.read(str(audio_path), always_2d=True)
+    waveform = data.mean(axis=1).astype(np.float32, copy=False)
 
     if sr != sample_rate and waveform.size > 0:
-        waveform = librosa.resample(waveform, orig_sr=sr, target_sr=sample_rate).astype(np.float32, copy=False)
+        g = math.gcd(sample_rate, sr)
+        waveform = scipy.signal.resample_poly(waveform, sample_rate // g, sr // g).astype(np.float32, copy=False)
         sr = sample_rate
 
     if waveform.size == 0:

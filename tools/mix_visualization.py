@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import librosa
 import numpy as np
 import pyqtgraph as pg
+import scipy.signal
 import soundfile as sf
 from PySide6.QtCore import QUrl, Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QMouseEvent
@@ -36,7 +36,6 @@ from PySide6.QtWidgets import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_WAVEFORM_SAMPLE_RATE = 16_000
 DEFAULT_WAVEFORM_POINTS = 5_000
-DEFAULT_AUDIO_SUFFIX = ".wav"
 
 PALETTE = [
     "#ff0000",  # red
@@ -107,7 +106,7 @@ def discover_audio_paths(input_dir: Path) -> list[Path]:
     audio_dir = input_dir / "audio"
     if not audio_dir.exists():
         raise FileNotFoundError(f"Missing audio directory under: {input_dir}")
-    paths = sorted(path.resolve() for path in audio_dir.glob(f"*{DEFAULT_AUDIO_SUFFIX}") if path.is_file())
+    paths = sorted(path.resolve() for path in audio_dir.glob("*.wav") if path.is_file())
     if not paths:
         raise FileNotFoundError(f"No audio files found under: {audio_dir}")
     return paths
@@ -177,19 +176,16 @@ def build_speaker_color_map(speakers: list[str]) -> dict[str, QColor]:
     return {speaker: QColor(PALETTE[i % len(PALETTE)]) for i, speaker in enumerate(speakers)}
 
 
-def load_waveform(audio_path: Path, sample_rate: int, max_points: int) -> tuple[np.ndarray, np.ndarray, int]:
+def _load_wav_mono_waveform(audio_path: Path, sample_rate: int, max_points: int) -> tuple[np.ndarray, np.ndarray, int]:
     if not audio_path.exists():
         raise FileNotFoundError(f"Audio file does not exist: {audio_path}")
 
-    try:
-        data, sr = sf.read(str(audio_path), always_2d=True, dtype="float32")
-        waveform = data.mean(axis=1).astype(np.float32, copy=False)
-    except Exception:
-        waveform, sr = librosa.load(str(audio_path), sr=None, mono=True)
-        waveform = waveform.astype(np.float32, copy=False)
+    data, sr = sf.read(str(audio_path), always_2d=True, dtype="float32")
+    waveform = data.mean(axis=1).astype(np.float32, copy=False)
 
     if sr != sample_rate and waveform.size > 0:
-        waveform = librosa.resample(waveform, orig_sr=sr, target_sr=sample_rate).astype(np.float32, copy=False)
+        g = math.gcd(sample_rate, sr)
+        waveform = scipy.signal.resample_poly(waveform, sample_rate // g, sr // g).astype(np.float32, copy=False)
         sr = sample_rate
 
     if waveform.size == 0:
@@ -202,6 +198,10 @@ def load_waveform(audio_path: Path, sample_rate: int, max_points: int) -> tuple[
 
     x = np.linspace(0.0, duration, num=waveform.size, endpoint=False, dtype=np.float32)
     return x, waveform, sr
+
+
+def load_waveform(audio_path: Path, sample_rate: int, max_points: int) -> tuple[np.ndarray, np.ndarray, int]:
+    return _load_wav_mono_waveform(audio_path, sample_rate, max_points)
 
 
 class ClickablePlotWidget(pg.PlotWidget):
@@ -269,30 +269,7 @@ def choose_default_group(groups: list[MixGroup]) -> MixGroup | None:
 
 
 def load_audio_waveform(audio_path: Path, sample_rate: int, max_points: int) -> tuple[np.ndarray, np.ndarray, int]:
-    if not audio_path.exists():
-        raise FileNotFoundError(f"Audio file does not exist: {audio_path}")
-
-    try:
-        data, sr = sf.read(str(audio_path), always_2d=True)
-        waveform = data.mean(axis=1).astype(np.float32, copy=False)
-    except Exception:
-        waveform, sr = librosa.load(str(audio_path), sr=None, mono=True)
-        waveform = waveform.astype(np.float32, copy=False)
-
-    if sr != sample_rate and waveform.size > 0:
-        waveform = librosa.resample(waveform, orig_sr=sr, target_sr=sample_rate).astype(np.float32, copy=False)
-        sr = sample_rate
-
-    if waveform.size == 0:
-        return np.zeros(1, dtype=np.float32), np.zeros(1, dtype=np.float32), sr
-
-    total_duration = float(waveform.size) / float(sr)
-    if waveform.size > max_points:
-        stride = int(math.ceil(waveform.size / max_points))
-        waveform = waveform[::stride]
-
-    x = np.linspace(0.0, total_duration, num=waveform.size, endpoint=False, dtype=np.float32)
-    return x, waveform, sr
+    return _load_wav_mono_waveform(audio_path, sample_rate, max_points)
 
 
 class ResultPanel(QWidget):

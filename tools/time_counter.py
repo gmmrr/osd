@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
 
 import argparse
+import soundfile as sf
 from pathlib import Path
 from collections import defaultdict
-from mutagen import File
-
-
-AUDIO_EXTS = {
-    ".wav", ".mp3", ".flac", ".ogg", ".m4a",
-    ".aac", ".wma", ".aiff", ".aif", ".opus"
-}
 
 
 def get_duration_seconds(path: Path):
-    audio = File(path)
-    if audio is None or audio.info is None:
+    try:
+        audio = sf.info(str(path))
+    except Exception:
         return None
-    return getattr(audio.info, "length", None)
+    return getattr(audio, "duration", None)
 
 
 def format_duration(seconds: float) -> str:
@@ -37,7 +32,7 @@ def main():
         if not path.is_file():
             continue
 
-        if path.suffix.lower() not in AUDIO_EXTS:
+        if path.suffix.lower() != ".wav":
             continue
 
         try:

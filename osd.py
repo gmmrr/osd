@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 from functools import wraps
+from math import gcd
 from pathlib import Path
 from typing import Dict, List
 
@@ -101,7 +102,6 @@ DEFAULT_ONSET = 0.2
 DEFAULT_OFFSET = 0.1
 DEFAULT_MIN_DURATION_ON = 0.0
 DEFAULT_MIN_DURATION_OFF = 0.0
-SUPPORTED_AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".ogg"}
 
 
 def _resolve_device(device: str) -> str:
@@ -115,9 +115,11 @@ def _resolve_device(device: str) -> str:
 
 def _collect_audio_files(path: Path) -> List[Path]:
     if path.is_file():
+        if path.suffix.lower() != ".wav":
+            raise ValueError(f"Expected a .wav file, got: {path}")
         return [path]
     if path.is_dir():
-        files = sorted(p for p in path.iterdir() if p.is_file() and p.suffix.lower() in SUPPORTED_AUDIO_SUFFIXES)
+        files = sorted(p for p in path.iterdir() if p.is_file() and p.suffix.lower() == ".wav")
         if not files:
             raise FileNotFoundError(f"No audio files found in directory: {path}")
         return files
@@ -133,9 +135,12 @@ def _load_audio_in_memory(audio_path: Path, sample_rate: int = DEFAULT_SAMPLE_RA
     waveform = waveform.T
 
     if sr != sample_rate:
+        divisor = gcd(sample_rate, sr)
+        up = sample_rate // divisor
+        down = sr // divisor
         resampled = []
         for channel in waveform:
-            resampled.append(scipy.signal.resample_poly(channel, sample_rate, sr).astype(np.float32))
+            resampled.append(scipy.signal.resample_poly(channel, up, down).astype(np.float32))
         max_len = max((len(channel) for channel in resampled), default=0)
         waveform = np.stack(
             [np.pad(channel, (0, max_len - len(channel)), mode="constant") for channel in resampled],
@@ -143,7 +148,7 @@ def _load_audio_in_memory(audio_path: Path, sample_rate: int = DEFAULT_SAMPLE_RA
         )
 
     if waveform.shape[0] > 1:
-        waveform = waveform[:1]
+        waveform = waveform.mean(axis=0, keepdims=True).astype(np.float32)
 
     return {
         "waveform": torch.from_numpy(np.asarray(waveform, dtype=np.float32)),
@@ -153,14 +158,18 @@ def _load_audio_in_memory(audio_path: Path, sample_rate: int = DEFAULT_SAMPLE_RA
 
 def _load_model(model_path: Path, device: str):
     _allow_pyannote_checkpoint_globals()
+    original_load = torch.load
     _patch_torch_load_weights_only()
 
     from pyannote.audio import Model
 
-    if not model_path.exists():
-        raise FileNotFoundError(f"Local model directory not found: {model_path}")
+    try:
+        if not model_path.exists():
+            raise FileNotFoundError(f"Local model directory not found: {model_path}")
 
-    model = Model.from_pretrained(str(model_path))
+        model = Model.from_pretrained(str(model_path))
+    finally:
+        torch.load = original_load  # type: ignore[assignment]
 
     if model is None:
         raise RuntimeError(
@@ -182,8 +191,8 @@ def _load_detector(model_path: Path, device: str):
 def _to_overlap_score(data: np.ndarray) -> np.ndarray:
     if data.ndim != 2 or data.shape[1] == 0:
         return np.zeros(0, dtype=np.float32)
-    if data.shape[1] == 1:
-        return np.asarray(data[:, 0], dtype=np.float32)
+    if data.shape[1] < 2:
+        return np.zeros(data.shape[0], dtype=np.float32)
     sorted_scores = np.sort(np.asarray(data, dtype=np.float32), axis=1)
     return sorted_scores[:, -2]
 
@@ -304,6 +313,7 @@ def detect_single(
     detector,
     input_path: Path,
     output_dir: Path,
+    model_path: Path,
     sample_rate: int = DEFAULT_SAMPLE_RATE,
     onset: float = DEFAULT_ONSET,
     offset: float = DEFAULT_OFFSET,
@@ -334,7 +344,7 @@ def detect_single(
     payload = {
         "uri": input_path.stem,
         "input": str(input_path.resolve()),
-        "model_path": str(DEFAULT_MODEL_PATH.resolve()),
+        "model_path": str(model_path.resolve()),
         "pipeline_name": DEFAULT_PIPELINE_NAME,
         "sample_rate": sample_rate,
         "onset": onset,
@@ -371,6 +381,9 @@ def run_detection(
     output_dir = Path(output_dir)
     model_path = Path(model_path)
 
+    if offset > onset:
+        raise ValueError(f"offset must be <= onset, got offset={offset}, onset={onset}")
+
     used_device = _resolve_device(device)
     detector = _load_detector(model_path=model_path, device=used_device)
 
@@ -382,6 +395,7 @@ def run_detection(
             detector=detector,
             input_path=in_file,
             output_dir=output_dir,
+            model_path=model_path,
             sample_rate=sample_rate,
             onset=onset,
             offset=offset,
