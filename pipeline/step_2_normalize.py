@@ -5,11 +5,12 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
-import librosa
 import numpy as np
+import scipy.signal
 import soundfile as sf
 
 try:
@@ -23,21 +24,24 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from config.params import (
-    AUDIO_SAMPLE_RATE,
-    EXT_WAV,
-    KEY_NORM,
-    KEY_STD,
-    NORMALIZE_TARGET_DBFS,
-    NORMALIZE_LIMIT_DB,
-    NORMALIZE_WAV_SUBTYPE,
+    STEP_1_AUDIO_SAMPLE_RATE,
+    STEP_2_NORMALIZE_TARGET_DBFS,
+    STEP_2_NORMALIZE_LIMIT_DB,
 )
+
+KEY_STD = "std"
+KEY_NORM = "nml"
+EXT_WAV = ".wav"
+NORMALIZE_WAV_SUBTYPE = "PCM_16"
+NORMALIZE_INPUTS = ["std"]
+NORMALIZE_RAISE_ON_MISSING_INPUT = True
 
 
 def loudness_normalize(
     y: np.ndarray,
     sample_rate: int,
-    target_dbfs: float = NORMALIZE_TARGET_DBFS,
-    limit_db: float = NORMALIZE_LIMIT_DB,
+    target_dbfs: float = STEP_2_NORMALIZE_TARGET_DBFS,
+    limit_db: float = STEP_2_NORMALIZE_LIMIT_DB,
 ) -> tuple[np.ndarray, float]:
     if pyln is None:
         raise RuntimeError(
@@ -66,17 +70,8 @@ def loudness_normalize(
 
 def normalize_single_audio(
     input_file: Path,
-    device: str = "auto",
     force: bool = False,
 ) -> Path:
-    """
-    Normalize one standardized file in place.
-
-    Expected input:
-        <stem>_std.wav
-    Output:
-        <stem>_std_nml.wav
-    """
     input_file = Path(input_file)
     if not input_file.name.endswith(f"_{KEY_STD}{EXT_WAV}"):
         raise ValueError(f"Normalize expects *_std.wav input, got: {input_file.name}")
@@ -86,17 +81,19 @@ def normalize_single_audio(
         print(f"↪ {input_file.name}: normalized file already exists (cached)")
         return out_path
 
-    y, sr = librosa.load(input_file, sr=None, mono=True)
+    y, sr = sf.read(str(input_file), always_2d=True, dtype="float32")
+    y = y.mean(axis=1).astype(np.float32, copy=False)
 
-    if sr != AUDIO_SAMPLE_RATE:
-        y = librosa.resample(y=y, orig_sr=sr, target_sr=AUDIO_SAMPLE_RATE)
-        sr = AUDIO_SAMPLE_RATE
+    if sr != STEP_1_AUDIO_SAMPLE_RATE:
+        g = math.gcd(STEP_1_AUDIO_SAMPLE_RATE, sr)
+        y = scipy.signal.resample_poly(y, STEP_1_AUDIO_SAMPLE_RATE // g, sr // g).astype(np.float32, copy=False)
+        sr = STEP_1_AUDIO_SAMPLE_RATE
 
     y, gain_db = loudness_normalize(
         y,
         sr,
-        target_dbfs=NORMALIZE_TARGET_DBFS,
-        limit_db=NORMALIZE_LIMIT_DB,
+        target_dbfs=STEP_2_NORMALIZE_TARGET_DBFS,
+        limit_db=STEP_2_NORMALIZE_LIMIT_DB,
     )
 
     sf.write(out_path, y, sr, subtype=NORMALIZE_WAV_SUBTYPE)
@@ -106,27 +103,35 @@ def normalize_single_audio(
 
 def run_normalize_dir(
     input_dir: Path | str,
-    device: str = "auto",
     force: bool = False,
 ) -> None:
-    """
-    Normalize all *_std.wav files in a directory.
-    """
     input_dir = Path(input_dir)
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
 
-    input_files = sorted(p for p in input_dir.iterdir() if p.is_file() and p.name.endswith(f"_{KEY_STD}{EXT_WAV}"))
+    input_files = []
+    invalid_files = []
+    for path in sorted(input_dir.iterdir()):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() != EXT_WAV:
+            continue
+        if path.name.endswith(f"_{KEY_STD}{EXT_WAV}"):
+            input_files.append(path)
+        else:
+            invalid_files.append(path.name)
+    if invalid_files:
+        raise ValueError(f"Normalize expects only *_{KEY_STD}{EXT_WAV} inputs, got: {', '.join(invalid_files[:5])}")
     if not input_files:
         print(f"⚠️  No standardized files found in: {input_dir}")
         return
 
     print(f"🚀 Normalize in '{input_dir}'")
     print(f"   • Files: {len(input_files)}")
-    print(f"   • Analysis SR: {AUDIO_SAMPLE_RATE}")
+    print(f"   • Analysis SR: {STEP_1_AUDIO_SAMPLE_RATE}")
 
     for file in input_files:
-        normalize_single_audio(file, device=device, force=force)
+        normalize_single_audio(file, force=force)
 
     print("✅ Normalization completed.")
 
@@ -134,8 +139,7 @@ def run_normalize_dir(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run normalization over a directory.")
     parser.add_argument("--input-dir", required=True, help="Directory containing *_std.wav files")
-    parser.add_argument("--device", default="auto", help="Device flag (accepted for CLI symmetry)")
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
     args = parser.parse_args()
 
-    run_normalize_dir(args.input_dir, device=args.device, force=args.force)
+    run_normalize_dir(args.input_dir, force=args.force)

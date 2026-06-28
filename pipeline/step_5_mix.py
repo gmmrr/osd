@@ -17,21 +17,34 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from config.params import AUDIO_SAMPLE_RATE, EXT_WAV
+from config.params import (
+    STEP_1_AUDIO_SAMPLE_RATE,
+)
 
-
-SPLITS = ("train", "dev", "test")
+EXT_WAV = ".wav"
+STEP_5_SPLITS = ("train", "dev", "test")
+STEP_5_TRAIN_RATIO = 0.8
+STEP_5_DEV_RATIO = 0.1
+STEP_5_TEST_RATIO = 0.1
+STEP_5_SEED = 42
+STEP_5_N_MIXTURES = 5
+STEP_5_PREFIX = "mix"
+STEP_5_INPUT_HELP = "Path to mix.json produced by mix_metadata.py."
+STEP_5_OUTPUT_DIR_HELP = "Dataset root directory to write audio/, rttm/, uem/, lists/, and database.yml."
 
 
 def load_mix_records(path: Path) -> list[dict[str, Any]]:
+    if path.name != "mix.json":
+        raise ValueError(f"mix expects mix.json input, got: {path.name}")
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
 
-    if isinstance(data, dict):
-        return [data]
-    if isinstance(data, list):
-        return [item for item in data if isinstance(item, dict)]
-    raise ValueError(f"Expected JSON array or object in {path}, got {type(data).__name__}.")
+    if not isinstance(data, list):
+        raise ValueError(f"Expected a JSON array in {path}, got {type(data).__name__}.")
+    records = [item for item in data if isinstance(item, dict)]
+    if len(records) != len(data):
+        raise ValueError(f"{path} must contain only JSON objects.")
+    return records
 
 
 def load_source_audio(path: Path, sample_rate: int) -> np.ndarray:
@@ -59,7 +72,7 @@ def apply_gain(audio: np.ndarray, gain_db: float) -> np.ndarray:
 
 
 def render_mix(record: dict[str, Any], output_path: Path) -> Path:
-    sample_rate = int(record.get("sample_rate", AUDIO_SAMPLE_RATE))
+    sample_rate = int(record.get("sample_rate", STEP_1_AUDIO_SAMPLE_RATE))
     duration = float(record["duration"])
     out_frames = int(round(duration * sample_rate))
 
@@ -131,9 +144,9 @@ def write_split_files(dataset_root: Path, records: list[dict[str, Any]], force: 
     uem_dir = dataset_root / "uem"
     lists_dir = dataset_root / "lists"
 
-    split_records: dict[str, list[dict[str, Any]]] = {split: [] for split in SPLITS}
+    split_records: dict[str, list[dict[str, Any]]] = {split: [] for split in STEP_5_SPLITS}
     for record in records:
-        split = split_key(record, 0.8, 0.1, 0.1)
+        split = split_key(record, STEP_5_TRAIN_RATIO, STEP_5_DEV_RATIO, STEP_5_TEST_RATIO)
         split_records[split].append(record)
 
         uri = str(record.get("uri", "mix"))
@@ -193,12 +206,12 @@ def write_split_files(dataset_root: Path, records: list[dict[str, Any]], force: 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render mixture wavs and dataset manifests from mix metadata JSON.")
-    parser.add_argument("--input", type=Path, required=True, help="Path to mix.json produced by mix_metadata.py.")
+    parser.add_argument("--input", type=Path, required=True, help=STEP_5_INPUT_HELP)
     parser.add_argument(
         "--output-dir",
         type=Path,
         required=True,
-        help="Dataset root directory to write audio/, rttm/, uem/, lists/, and database.yml.",
+        help=STEP_5_OUTPUT_DIR_HELP,
     )
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs.")
     return parser.parse_args()

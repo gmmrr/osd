@@ -7,12 +7,13 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
 
-import librosa
 import numpy as np
+import scipy.signal
 import soundfile as sf
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -20,46 +21,50 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from config.params import (
-    AUDIO_SAMPLE_RATE,
-    VAD_ENERGY_REL_THRESHOLD,
-    VAD_EXPAND_DELTA,
-    VAD_EXPAND_POST,
-    VAD_EXPAND_PRE,
-    VAD_PAD_MS,
-    VAD_SMOOTHING_WINDOW,
+    STEP_1_AUDIO_SAMPLE_RATE,
+    STEP_3_VAD_ENERGY_REL_THRESHOLD,
+    STEP_3_VAD_EXPAND_DELTA,
+    STEP_3_VAD_EXPAND_POST,
+    STEP_3_VAD_EXPAND_PRE,
+    STEP_3_VAD_PAD,
+    STEP_3_VAD_SMOOTHING_WINDOW,
+    STEP_3_VAD_THRESHOLD,
+    STEP_3_VAD_MIN_SPEECH,
+    STEP_3_VAD_MIN_SILENCE,
+    STEP_3_VAD_RMS_FRAME,
+    STEP_3_VAD_RMS_HOP,
 )
 
+VAD_MODEL_NAME = "RMS-Energy-VAD"
+VAD_INPUT_DIR_HELP = "Directory containing .wav files"
 
-SUPPORTED_AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".ogg"}
-DEFAULT_VAD_THRESHOLD = 0.05
-DEFAULT_MIN_SPEECH_MS = 25
-DEFAULT_MIN_SILENCE_MS = 75
-EXPERIMENT_THRESHOLDS = tuple(round(i * 0.05, 2) for i in range(1, 7))
-RMS_FRAME_MS = 25
-RMS_HOP_MS = 10
-RMS_VAD_MODEL_NAME = "RMS-Energy-VAD"
 
 _SPEAKER_ID_CACHE: dict[str, str | None] = {}
 
 
-def format_threshold_suffix(vad_threshold: float) -> str:
-    return f"{vad_threshold:.2f}".split(".")[1]
-
-
-def _load_audio(path: Path, sample_rate: int = AUDIO_SAMPLE_RATE) -> tuple[np.ndarray, int]:
-    wav, sr = sf.read(path, always_2d=True)
-    wav = wav.mean(axis=1)
-    if sr != sample_rate:
-        wav = librosa.resample(y=wav, orig_sr=sr, target_sr=sample_rate)
+def _load_audio(path: Path, sample_rate: int = STEP_1_AUDIO_SAMPLE_RATE) -> tuple[np.ndarray, int]:
+    wav, sr = sf.read(str(path), always_2d=True, dtype="float32")
+    wav = wav.mean(axis=1).astype(np.float32, copy=False)
+    if sr != sample_rate and wav.size > 0:
+        g = math.gcd(sample_rate, sr)
+        wav = scipy.signal.resample_poly(wav, sample_rate // g, sr // g).astype(np.float32, copy=False)
         sr = sample_rate
-    return wav.astype(np.float32, copy=False), sr
+    return wav, sr
 
 
-def discover_input_files(input_dir: Path, audio_pattern: str) -> list[Path]:
-    return sorted(
-        p for p in input_dir.glob(audio_pattern)
-        if p.is_file() and p.suffix.lower() in SUPPORTED_AUDIO_SUFFIXES
-    )
+def discover_input_files(input_dir: Path) -> list[Path]:
+    input_files: list[Path] = []
+    invalid_files: list[str] = []
+    for path in sorted(input_dir.iterdir()):
+        if not path.is_file() or path.suffix.lower() != ".wav":
+            continue
+        if path.name.endswith("_std_nml.wav"):
+            input_files.append(path)
+        else:
+            invalid_files.append(path.name)
+    if invalid_files:
+        raise ValueError(f"VAD expects only *_std_nml.wav inputs, got: {', '.join(invalid_files[:5])}")
+    return input_files
 
 
 def _candidate_metadata_paths(audio_path: Path) -> list[Path]:
@@ -180,9 +185,9 @@ def _mask_to_segments(
     hop_length: int,
     frame_length: int,
     sample_rate: int,
-    min_speech_ms: int,
-    min_silence_ms: int,
-    pad_ms: int,
+    min_speech: int,
+    min_silence: int,
+    pad: int,
     n_samples: int,
 ) -> list[dict[str, float]]:
     segments: list[tuple[int, int]] = []
@@ -201,9 +206,9 @@ def _mask_to_segments(
         start_sample = start_frame * hop_length
         segments.append((start_sample, n_samples))
 
-    min_speech_samples = int(sample_rate * min_speech_ms / 1000.0)
-    min_silence_samples = int(sample_rate * min_silence_ms / 1000.0)
-    pad_samples = int(sample_rate * pad_ms / 1000.0)
+    min_speech_samples = int(sample_rate * min_speech / 1000.0)
+    min_silence_samples = int(sample_rate * min_silence / 1000.0)
+    pad_samples = int(sample_rate * pad / 1000.0)
 
     filtered = [(start, end) for start, end in segments if end - start >= min_speech_samples]
     if not filtered:
@@ -231,13 +236,22 @@ def rms_vad_segments(
     wav_cpu: np.ndarray,
     sr: int,
     threshold: float,
-    min_speech_ms: int,
-    min_silence_ms: int,
-    pad_ms: int,
+    min_speech: int,
+    min_silence: int,
+    pad: int,
 ) -> list[dict[str, float]]:
-    frame_length = max(1, int(sr * RMS_FRAME_MS / 1000.0))
-    hop_length = max(1, int(sr * RMS_HOP_MS / 1000.0))
-    rms = librosa.feature.rms(y=wav_cpu, frame_length=frame_length, hop_length=hop_length, center=True)[0]
+    frame_length = max(1, int(sr * STEP_3_VAD_RMS_FRAME / 1000.0))
+    hop_length = max(1, int(sr * STEP_3_VAD_RMS_HOP / 1000.0))
+    if wav_cpu.size == 0:
+        return []
+
+    pad = frame_length // 2
+    padded = np.pad(wav_cpu, (pad, pad), mode="constant")
+    rms = np.array(
+        [float(np.sqrt(np.mean(padded[start : start + frame_length] ** 2))) for start in range(0, padded.size - frame_length + 1, hop_length)],
+        dtype=np.float32,
+    )
+
     if rms.size == 0:
         return []
 
@@ -251,9 +265,9 @@ def rms_vad_segments(
         hop_length=hop_length,
         frame_length=frame_length,
         sample_rate=sr,
-        min_speech_ms=min_speech_ms,
-        min_silence_ms=min_silence_ms,
-        pad_ms=pad_ms,
+        min_speech=min_speech,
+        min_silence=min_silence,
+        pad=pad,
         n_samples=len(wav_cpu),
     )
 
@@ -261,9 +275,9 @@ def rms_vad_segments(
 def vad_single_audio(
     audio_path: Path,
     vad_threshold: float,
-    vad_min_speech_ms: int,
-    vad_min_silence_ms: int,
-    vad_pad_ms: int,
+    vad_min_speech: int,
+    vad_min_silence: int,
+    vad_pad: int,
     out_suffix: str | None = None,
     out_dir: Path | None = None,
     quiet: bool = True,
@@ -284,23 +298,27 @@ def vad_single_audio(
         wav_cpu=wav_cpu,
         sr=sr,
         threshold=vad_threshold,
-        min_speech_ms=vad_min_speech_ms,
-        min_silence_ms=vad_min_silence_ms,
-        pad_ms=vad_pad_ms,
+        min_speech=vad_min_speech,
+        min_silence=vad_min_silence,
+        pad=vad_pad,
     )
 
     energy = np.abs(wav_cpu)
-    smooth = np.convolve(energy, np.ones(VAD_SMOOTHING_WINDOW) / VAD_SMOOTHING_WINDOW, mode="same")
+    smooth = np.convolve(
+        energy,
+        np.ones(STEP_3_VAD_SMOOTHING_WINDOW) / STEP_3_VAD_SMOOTHING_WINDOW,
+        mode="same",
+    )
     mean_e = float(np.mean(smooth)) if smooth.size else 0.0
-    energy_threshold = VAD_ENERGY_REL_THRESHOLD * mean_e
+    energy_threshold = STEP_3_VAD_ENERGY_REL_THRESHOLD * mean_e
     n_samples = len(wav_cpu)
     speaker_id = infer_speaker_id(audio_path)
 
     expanded: list[dict[str, float]] = []
     for seg in segments:
-        start = max(0, int(round(float(seg["start"]) * sr)) - int(VAD_EXPAND_PRE * sr))
-        end = min(n_samples, int(round(float(seg["end"]) * sr)) + int(VAD_EXPAND_POST * sr))
-        step_delta = max(1, int(VAD_EXPAND_DELTA * sr))
+        start = max(0, int(round(float(seg["start"]) * sr)) - int(STEP_3_VAD_EXPAND_PRE * sr / 1000.0))
+        end = min(n_samples, int(round(float(seg["end"]) * sr)) + int(STEP_3_VAD_EXPAND_POST * sr / 1000.0))
+        step_delta = max(1, int(STEP_3_VAD_EXPAND_DELTA * sr / 1000.0))
 
         while start > 0 and smooth[start] > energy_threshold:
             start = max(0, start - step_delta)
@@ -318,19 +336,19 @@ def vad_single_audio(
         "segment_count": len(merged_segments),
         "segments": merged_segments,
         "parameters": {
-            "model": RMS_VAD_MODEL_NAME,
+            "model": VAD_MODEL_NAME,
             "threshold": vad_threshold,
             "threshold_type": "relative_rms_to_max",
-            "pad_ms": vad_pad_ms,
-            "min_speech_ms": vad_min_speech_ms,
-            "min_silence_ms": vad_min_silence_ms,
-            "rms_frame_ms": RMS_FRAME_MS,
-            "rms_hop_ms": RMS_HOP_MS,
-            "energy_threshold_rel": VAD_ENERGY_REL_THRESHOLD,
-            "smoothing_window": VAD_SMOOTHING_WINDOW,
-            "expand_pre_s": VAD_EXPAND_PRE,
-            "expand_post_s": VAD_EXPAND_POST,
-            "expand_delta_s": VAD_EXPAND_DELTA,
+            "pad": vad_pad,
+            "min_speech": vad_min_speech,
+            "min_silence": vad_min_silence,
+            "rms_frame": STEP_3_VAD_RMS_FRAME,
+            "rms_hop": STEP_3_VAD_RMS_HOP,
+            "energy_threshold_rel": STEP_3_VAD_ENERGY_REL_THRESHOLD,
+            "smoothing_window": STEP_3_VAD_SMOOTHING_WINDOW,
+            "expand_pre": STEP_3_VAD_EXPAND_PRE,
+            "expand_post": STEP_3_VAD_EXPAND_POST,
+            "expand_delta": STEP_3_VAD_EXPAND_DELTA,
             "device": "cpu",
             "speaker_id": speaker_id,
         },
@@ -346,12 +364,10 @@ def vad_single_audio(
 
 def run_vad_dir(
     input_dir: Path | str,
-    audio_pattern: str = "*_std_nml.wav",
-    vad_threshold: float = DEFAULT_VAD_THRESHOLD,
-    vad_min_speech_ms: int = DEFAULT_MIN_SPEECH_MS,
-    vad_min_silence_ms: int = DEFAULT_MIN_SILENCE_MS,
-    vad_pad_ms: int = VAD_PAD_MS,
-    device: str = "auto",
+    vad_threshold: float = STEP_3_VAD_THRESHOLD,
+    vad_min_speech: int = STEP_3_VAD_MIN_SPEECH,
+    vad_min_silence: int = STEP_3_VAD_MIN_SILENCE,
+    vad_pad: int = STEP_3_VAD_PAD,
     force: bool = False,
     out_suffix: str | None = None,
     out_dir: Path | None = None,
@@ -361,24 +377,23 @@ def run_vad_dir(
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
 
-    input_files = discover_input_files(input_dir, audio_pattern)
+    input_files = discover_input_files(input_dir)
     if not input_files:
-        print(f"⚠️  No normalized audio files found in: {input_dir}")
+        print(f"⚠️  No .wav files found in: {input_dir}")
         return
 
     if not quiet:
         print(f"🚀 RMS VAD in '{input_dir}'")
         print(f"   • Device: cpu")
         print(f"   • Files: {len(input_files)}")
-        print(f"   • Pattern: {audio_pattern}")
 
     for file in input_files:
         vad_single_audio(
             file,
             vad_threshold=vad_threshold,
-            vad_min_speech_ms=vad_min_speech_ms,
-            vad_min_silence_ms=vad_min_silence_ms,
-            vad_pad_ms=vad_pad_ms,
+            vad_min_speech=vad_min_speech,
+            vad_min_silence=vad_min_silence,
+            vad_pad=vad_pad,
             out_suffix=out_suffix,
             out_dir=out_dir,
             quiet=quiet,
@@ -389,95 +404,28 @@ def run_vad_dir(
         print("✅ RMS VAD completed.")
 
 
-def run_vad_experiments_dir(
-    input_dir: Path | str,
-    audio_pattern: str = "*_std_nml.wav",
-    vad_min_speech_ms: int = DEFAULT_MIN_SPEECH_MS,
-    vad_min_silence_ms: int = DEFAULT_MIN_SILENCE_MS,
-    vad_pad_ms: int = VAD_PAD_MS,
-    device: str = "auto",
-    force: bool = False,
-    quiet: bool = True,
-) -> None:
-    input_dir = Path(input_dir)
-    if not input_dir.exists():
-        raise FileNotFoundError(f"Input directory not found: {input_dir}")
-
-    input_files = discover_input_files(input_dir, audio_pattern)
-    if not input_files:
-        print(f"⚠️  No normalized audio files found in: {input_dir}")
-        return
-
-    if not quiet:
-        print(f"🚀 RMS VAD experiments in '{input_dir}'")
-        print(f"   • Device: cpu")
-        print(f"   • Thresholds: {', '.join(f'{t:.2f}' for t in EXPERIMENT_THRESHOLDS)}")
-
-    for file in input_files:
-        file_out_dir = file.parent / f"{file.stem}_vad"
-        if not quiet:
-            print(f"   • {file.name} -> {file_out_dir}")
-        for threshold in EXPERIMENT_THRESHOLDS:
-            if not quiet:
-                print(f"      - threshold={threshold:.2f}")
-            vad_single_audio(
-                file,
-                vad_threshold=threshold,
-                vad_min_speech_ms=vad_min_speech_ms,
-                vad_min_silence_ms=vad_min_silence_ms,
-                vad_pad_ms=vad_pad_ms,
-                out_suffix=format_threshold_suffix(threshold),
-                out_dir=file_out_dir,
-                quiet=quiet,
-                force=force,
-            )
-
-    if not quiet:
-        print("✅ RMS VAD experiments completed.")
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run RMS-based VAD over a directory.")
-    parser.add_argument("--input-dir", required=True, help="Directory containing *_std_nml.wav files")
-    parser.add_argument("--audio-pattern", default="*_std_nml.wav", help="Glob pattern used to select input files")
+    parser.add_argument("--input-dir", required=True, help=VAD_INPUT_DIR_HELP)
     parser.add_argument("--threshold", type=float, default=None, help="Relative RMS threshold.")
-    parser.add_argument("--min_speech_ms", type=int, default=DEFAULT_MIN_SPEECH_MS, help="Minimum speech segment length (ms)")
-    parser.add_argument("--min_silence_ms", type=int, default=DEFAULT_MIN_SILENCE_MS, help="Minimum silence gap (ms)")
-    parser.add_argument("--pad_ms", type=int, default=VAD_PAD_MS, help="Context padding around each segment (ms)")
-    parser.add_argument("--device", default="auto", help="Accepted for CLI compatibility with vad.py")
+    parser.add_argument("--min-speech", type=int, default=STEP_3_VAD_MIN_SPEECH, help="Minimum speech segment length (ms)")
+    parser.add_argument("--min-silence", type=int, default=STEP_3_VAD_MIN_SILENCE, help="Minimum silence gap (ms)")
+    parser.add_argument("--pad", type=int, default=STEP_3_VAD_PAD, help="Context padding around each segment (ms)")
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
-    parser.add_argument("--experiments", action="store_true", help="Run thresholds from 0.05 to 0.30 in 0.05 steps.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-
-    if args.experiments and args.threshold is not None:
-        raise ValueError("--experiments cannot be combined with --threshold")
-
-    if args.experiments:
-        run_vad_experiments_dir(
-            args.input_dir,
-            audio_pattern=args.audio_pattern,
-            vad_min_speech_ms=args.min_speech_ms,
-            vad_min_silence_ms=args.min_silence_ms,
-            vad_pad_ms=args.pad_ms,
-            device=args.device,
-            force=args.force,
-        )
-    else:
-        vad_threshold = DEFAULT_VAD_THRESHOLD if args.threshold is None else args.threshold
-        run_vad_dir(
-            args.input_dir,
-            audio_pattern=args.audio_pattern,
-            vad_threshold=vad_threshold,
-            vad_min_speech_ms=args.min_speech_ms,
-            vad_min_silence_ms=args.min_silence_ms,
-            vad_pad_ms=args.pad_ms,
-            device=args.device,
-            force=args.force,
-        )
+    vad_threshold = STEP_3_VAD_THRESHOLD if args.threshold is None else args.threshold
+    run_vad_dir(
+        args.input_dir,
+        vad_threshold=vad_threshold,
+        vad_min_speech=args.min_speech,
+        vad_min_silence=args.min_silence,
+        vad_pad=args.pad,
+        force=args.force,
+    )
 
 
 if __name__ == "__main__":

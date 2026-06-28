@@ -5,85 +5,63 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
-import librosa
 import numpy as np
+import scipy.signal
 import soundfile as sf
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from config.params import AUDIO_SAMPLE_RATE
-from config.params import EXT_WAV, KEY_STD
+from config.params import STEP_1_AUDIO_SAMPLE_RATE
 
-SUPPORTED_AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".ogg"}
+KEY_STD = "std"
+EXT_WAV = ".wav"
 
 
 def _is_raw_audio(path: Path) -> bool:
-    if not path.is_file():
-        return False
-    if path.suffix.lower() not in SUPPORTED_AUDIO_SUFFIXES:
+    if not path.is_file() or path.suffix.lower() != EXT_WAV:
         return False
     stem = path.stem.lower()
     return not stem.endswith(f"_{KEY_STD}") and not stem.endswith(f"_{KEY_STD}_nml")
 
 
-def standardize_single_audio(
-    input_file: Path,
-    device: str = "auto",
-    force: bool = False,
-) -> Path:
-    """
-    Standardize one audio file in place.
-
-    Output:
-        <input_stem>_std.wav in the same directory as the input.
-    """
+def standardize_single_audio(input_file: Path, force: bool = False) -> Path:
     input_file = Path(input_file)
     out_path = input_file.with_name(f"{input_file.stem}_{KEY_STD}{EXT_WAV}")
-
     if out_path.exists() and not force:
         print(f"↪ {input_file.name}: standardized file already exists (cached)")
         return out_path
 
-    y, sr_in = librosa.load(input_file, sr=None, mono=False)
-    if y.ndim == 1:
-        y = np.stack([y, y], axis=0)
-    elif y.shape[0] > 2:
-        y = y[:2]
-
-    if sr_in != AUDIO_SAMPLE_RATE:
+    y, sr_in = sf.read(str(input_file), always_2d=True, dtype="float32")
+    y = y.T[:2]
+    if y.shape[0] == 1:
+        y = np.repeat(y, 2, axis=0)
+    if sr_in != STEP_1_AUDIO_SAMPLE_RATE:
+        g = math.gcd(STEP_1_AUDIO_SAMPLE_RATE, sr_in)
         y = np.stack(
             [
-                librosa.resample(y=y[0], orig_sr=sr_in, target_sr=AUDIO_SAMPLE_RATE),
-                librosa.resample(y=y[1], orig_sr=sr_in, target_sr=AUDIO_SAMPLE_RATE),
+                scipy.signal.resample_poly(y[0], STEP_1_AUDIO_SAMPLE_RATE // g, sr_in // g),
+                scipy.signal.resample_poly(y[1], STEP_1_AUDIO_SAMPLE_RATE // g, sr_in // g),
             ],
             axis=0,
-        )
-        sr_out = AUDIO_SAMPLE_RATE
-    else:
-        sr_out = int(sr_in)
+        ).astype(np.float32, copy=False)
+        sr_in = STEP_1_AUDIO_SAMPLE_RATE
 
     peak = float(np.max(np.abs(y)))
     if peak > 0.0:
         y = y / peak
 
-    sf.write(out_path, y.T, sr_out, subtype="PCM_16")
-    print(f"Standardized: {input_file.name} -> {out_path.name} ({sr_out} Hz, stereo)")
+    sf.write(out_path, y.T, sr_in, subtype="PCM_16")
+    print(f"Standardized: {input_file.name} -> {out_path.name} ({sr_in} Hz, stereo)")
     return out_path
 
 
-def run_standardize_dir(
-    input_dir: Path | str,
-    device: str = "auto",
-    force: bool = False,
-) -> None:
-    """
-    Standardize all raw audio files in a directory.
-    """
+def run_standardize_dir(input_dir: Path | str, force: bool = False) -> None:
     input_dir = Path(input_dir)
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
@@ -95,10 +73,10 @@ def run_standardize_dir(
 
     print(f"🚀 Standardize in '{input_dir}'")
     print(f"   • Files: {len(input_files)}")
-    print(f"   • Target SR: {AUDIO_SAMPLE_RATE}")
+    print(f"   • Target SR: {STEP_1_AUDIO_SAMPLE_RATE}")
 
     for file in input_files:
-        standardize_single_audio(file, device=device, force=force)
+        standardize_single_audio(file, force=force)
 
     print("✅ Standardization completed.")
 
@@ -106,8 +84,7 @@ def run_standardize_dir(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run standardization over a directory.")
     parser.add_argument("--input-dir", required=True, help="Directory containing raw audio files")
-    parser.add_argument("--device", default="auto", help="Device flag (accepted for CLI symmetry)")
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
     args = parser.parse_args()
 
-    run_standardize_dir(args.input_dir, device=args.device, force=args.force)
+    run_standardize_dir(args.input_dir, force=args.force)
