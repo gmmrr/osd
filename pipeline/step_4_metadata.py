@@ -432,6 +432,11 @@ def main() -> None:
     rng = random.Random(args.seed)
     mixtures: list[dict[str, Any]] = []
     attempts = 0
+
+    print(f"🚀 Generate metadata in '{args.vad_dir}'")
+    print(f"   • Speaker groups: {len(groups)}")
+    print(f"   • Target mixtures: {args.n_mixtures}")
+
     while len(mixtures) < args.n_mixtures:
         attempts += 1
         if attempts > args.max_build_trials:
@@ -454,12 +459,11 @@ def main() -> None:
     write_json(mixtures, args.out, force=args.force)
     usage_counts = Counter(name for mixture in mixtures for name in {src["audio_derivative"] for src in mixture["sources"]})
 
-    print(f"Loaded active segments: {sum(len(group.segments) for group in groups)}")
-    print(f"Loaded speaker groups: {len(groups)}")
-    print(f"Wrote mixtures: {len(mixtures)}")
-    print(f"Attempts: {attempts}")
-    print(f"Output: {args.out}")
-    print("Source usage counts:")
+    print(f"   • Active segments: {sum(len(group.segments) for group in groups)}")
+    print(f"   • Wrote mixtures: {len(mixtures)}")
+    print(f"   • Attempts: {attempts}")
+    print(f"✅ Output: {args.out}")
+    print("   • Source usage counts:")
     for name in sorted(usage_counts):
         print(f"  {name}: {usage_counts[name]}")
 

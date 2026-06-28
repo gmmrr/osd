@@ -207,11 +207,12 @@ def main() -> None:
         raise RuntimeError(f"No mix records found in {args.input}.")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"🚀 Render mixes in '{args.output_dir}'")
+    print(f"   • Records: {len(records)}")
     write_split_files(args.output_dir, records, force=args.force)
 
-    print(f"Loaded records: {len(records)}")
-    print(f"Output root: {args.output_dir}")
-    print("Wrote: audio/, rttm/, uem/, lists/, database.yml")
+    print(f"✅ Output root: {args.output_dir}")
+    print("   • Wrote: audio/, rttm/, uem/, lists/, database.yml")
 
 
 if __name__ == "__main__":
