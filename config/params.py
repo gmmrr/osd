@@ -27,7 +27,7 @@ STEP_4_MIN_SEGMENT_DURATION = 500  # minimum active segment duration, in ms
 STEP_4_MIN_MIXTURE_DURATION = 15000  # minimum mixture duration, in ms
 STEP_4_MAX_MIXTURE_DURATION = 25000  # maximum mixture duration, in ms
 STEP_4_OVERLAP_RATIO = 0.2  # overlap ratio center
-STEP_4_OVERLAP_RANDOM_OFFSET = 0.0  # overlap ratio random offset
+STEP_4_OVERLAP_RANDOM_OFFSET = 0.05  # overlap ratio random offset
 STEP_4_SEED = 42  # random seed for reproducible metadata generation (not recommended to adjust)
 
 STEP_5_TRAIN_RATIO = 0.8  # dataset split ratios
