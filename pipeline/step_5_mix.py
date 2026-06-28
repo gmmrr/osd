@@ -13,13 +13,11 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
-try:
-    from config.constants import EXT_WAV
-    from config.params import AUDIO_SAMPLE_RATE
-except ModuleNotFoundError:  # pragma: no cover - convenience for `uv run utils/mix.py`
-    sys.path.append(str(Path(__file__).resolve().parents[1]))
-    from config.constants import EXT_WAV
-    from config.params import AUDIO_SAMPLE_RATE
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from config.params import AUDIO_SAMPLE_RATE, EXT_WAV
 
 
 SPLITS = ("train", "dev", "test")
