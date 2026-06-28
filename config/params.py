@@ -1,5 +1,10 @@
-from config.constants import KEY_BACKGROUND, KEY_STD, KEY_VOCALS
+KEY_STD = "std"
+KEY_VOCALS = "vocals"
+KEY_BACKGROUND = "background"
+KEY_NORM = "nml"
 
+EXT_WAV = ".wav"
+EXT_JSON = ".json"
 
 AUDIO_SAMPLE_RATE = 16000
 
