@@ -7,8 +7,6 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-import torch
-
 
 DEFAULT_DATABASE_NAME = "MixDataset"
 DEFAULT_PROTOCOL_NAME = "MixDiarization"
@@ -16,7 +14,6 @@ DEFAULT_MODEL_DIR = Path("models/pyannote-segmentation-3.0")
 DEFAULT_CHUNK_DURATION = 10.0
 DEFAULT_BATCH_SIZE = 16
 DEFAULT_MAX_EPOCHS = 1
-DEFAULT_PRETRAINED_STRIDE = 10
 DEFAULT_MAX_SPEAKERS_PER_CHUNK = 3
 DEFAULT_MAX_SPEAKERS_PER_FRAME = 2
 
@@ -57,6 +54,16 @@ def collect_dataset_info(dataset_root: Path) -> tuple[dict[str, Path], dict[str,
         audio_path = dirs["audio"] / f"{uri}.wav"
         if not audio_path.exists():
             raise FileNotFoundError(f"Missing audio file for URI '{uri}': {audio_path}")
+
+    train_set = set(split_uris["train"])
+    dev_set = set(split_uris["dev"])
+    test_set = set(split_uris["test"])
+    if train_set & dev_set:
+        raise RuntimeError("train/dev overlap detected.")
+    if train_set & test_set:
+        raise RuntimeError("train/test overlap detected.")
+    if dev_set & test_set:
+        raise RuntimeError("dev/test overlap detected.")
 
     return dirs, split_paths, split_uris
 
@@ -100,19 +107,10 @@ def write_training_database_yml(
 
 
 def load_pretrained_model(model_dir: Path, task) -> Any:
-    from pyannote.audio.models.segmentation import PyanNet
+    from pyannote.audio import Model
 
-    model = PyanNet(
-        task=task,
-        sincnet={"stride": DEFAULT_PRETRAINED_STRIDE},
-        lstm={"hidden_size": 128, "num_layers": 4, "bidirectional": True, "monolithic": True},
-        linear={"hidden_size": 128, "num_layers": 2},
-    )
-
-    checkpoint = model_dir / "pytorch_model.bin"
-    if checkpoint.exists():
-        state_dict = torch.load(checkpoint, map_location="cpu")
-        model.load_state_dict(state_dict, strict=False)
+    model = Model.from_pretrained(model_dir)
+    model.task = task
     return model
 
 
@@ -126,6 +124,7 @@ def train_model(
 ) -> Path:
     from pyannote.database import registry
     from pyannote.audio.tasks import SpeakerDiarization
+    from pytorch_lightning.callbacks import ModelCheckpoint
     import pytorch_lightning as pl
 
     registry.load_database(str(database_yml))
@@ -142,17 +141,36 @@ def train_model(
     )
 
     model = load_pretrained_model(model_dir, task)
+    if model.task is not task:
+        raise RuntimeError("Task was not attached to model correctly.")
+    print("Model specifications:")
+    print(model.specifications)
+    print("Task specifications:")
+    print(task.specifications)
+
     checkpoint_dir = output_dir / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_callback = ModelCheckpoint(
+        save_last=True,
+        save_top_k=0,
+        dirpath=str(checkpoint_dir),
+    )
     trainer = pl.Trainer(
         accelerator="auto" if device == "auto" else device,
         devices=1,
         max_epochs=max_epochs,
-        default_root_dir=str(checkpoint_dir),
+        default_root_dir=str(output_dir),
+        callbacks=[checkpoint_callback],
+        log_every_n_steps=1,
     )
     trainer.fit(model)
 
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    return checkpoint_dir
+    last_checkpoint = getattr(checkpoint_callback, "last_model_path", "")
+    if not last_checkpoint:
+        raise RuntimeError("Training finished but no checkpoint was saved.")
+
+    print(f"Last checkpoint: {last_checkpoint}")
+    return Path(last_checkpoint)
 
 
 def parse_args() -> argparse.Namespace:
@@ -179,7 +197,7 @@ def main() -> None:
     for split in SPLITS:
         print(f"{split}: {len(split_uris[split])} record(s)")
 
-    checkpoint_dir = train_model(
+    checkpoint_path = train_model(
         output_dir=args.output_dir,
         database_yml=database_yml,
         model_dir=args.model_dir,
@@ -188,7 +206,7 @@ def main() -> None:
         device=args.device,
     )
 
-    print(f"Checkpoints: {checkpoint_dir}")
+    print(f"Checkpoint: {checkpoint_path}")
 
 
 if __name__ == "__main__":
