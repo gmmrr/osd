@@ -39,6 +39,16 @@ VAD_MODEL_NAME = "RMS-Energy-VAD"
 
 
 def _load_audio(path: Path, sample_rate: int = STEP_1_AUDIO_SAMPLE_RATE) -> tuple[np.ndarray, int]:
+    """
+    Load one WAV file and convert it to mono float32 audio.
+
+    Args:
+        path: Input WAV path.
+        sample_rate: Target sample rate for resampling.
+
+    Returns:
+        A tuple of (mono waveform, sample rate).
+    """
     wav, sr = sf.read(str(path), always_2d=True, dtype="float32")
     wav = wav.mean(axis=1)
     if sr != sample_rate and wav.size > 0:
@@ -49,11 +59,30 @@ def _load_audio(path: Path, sample_rate: int = STEP_1_AUDIO_SAMPLE_RATE) -> tupl
 
 
 def discover_input_files(input_dir: Path) -> list[Path]:
+    """
+    Find VAD input files in a directory.
+
+    Args:
+        input_dir: Directory to scan.
+
+    Returns:
+        Sorted list of files ending with *_std_nml.wav.
+    """
     paths = [path for path in sorted(input_dir.iterdir()) if path.is_file() and path.suffix.lower() == ".wav"]
     return [path for path in paths if path.name.endswith("_std_nml.wav")]
 
 
 def _match_wav_reference(audio_path: Path, raw_value: Any) -> bool:
+    """
+    Check whether a metadata field points to the provided WAV file.
+
+    Args:
+        audio_path: WAV path to match against.
+        raw_value: Metadata value to inspect.
+
+    Returns:
+        True when the value appears to reference the audio path.
+    """
     if raw_value is None:
         return False
 
@@ -84,6 +113,15 @@ def _match_wav_reference(audio_path: Path, raw_value: Any) -> bool:
 
 
 def infer_speaker_id(audio_path: Path) -> str | None:
+    """
+    Infer speaker_id from nearby metadata files.
+
+    Args:
+        audio_path: Audio file used as the lookup key.
+
+    Returns:
+        The inferred speaker_id, or None when no match is found.
+    """
     inferred: str | None = None
     seen: set[Path] = set()
     for parent in [audio_path.parent, *audio_path.parents]:
@@ -145,6 +183,22 @@ def _mask_to_segments(
     pad: int,
     n_samples: int,
 ) -> list[dict[str, float]]:
+    """
+    Convert an activity mask into padded speech segments.
+
+    Args:
+        active: Boolean activity mask over frames.
+        hop_length: Frame hop size in samples.
+        frame_length: Frame length in samples.
+        sample_rate: Audio sample rate.
+        min_speech: Minimum speech duration in milliseconds.
+        min_silence: Minimum silence gap in milliseconds.
+        pad: Padding to apply around each segment in milliseconds.
+        n_samples: Total number of samples in the waveform.
+
+    Returns:
+        Speech segments in seconds.
+    """
     segments: list[tuple[int, int]] = []
     start_frame: int | None = None
 
@@ -203,6 +257,20 @@ def rms_vad_segments(
     min_silence: int,
     pad: int,
 ) -> list[dict[str, float]]:
+    """
+    Detect speech segments with RMS energy thresholding.
+
+    Args:
+        wav_cpu: Mono waveform in CPU memory.
+        sr: Waveform sample rate.
+        threshold: Relative RMS threshold.
+        min_speech: Minimum speech duration in milliseconds.
+        min_silence: Minimum silence gap in milliseconds.
+        pad: Padding to apply around each segment in milliseconds.
+
+    Returns:
+        Speech segments in seconds.
+    """
     frame_length = max(1, int(sr * STEP_3_VAD_RMS_FRAME / 1000.0))
     hop_length = max(1, int(sr * STEP_3_VAD_RMS_HOP / 1000.0))
     if wav_cpu.size == 0:
@@ -246,6 +314,23 @@ def vad_single_audio(
     quiet: bool = True,
     force: bool = False,
 ) -> Path:
+    """
+    Step 3: Run VAD on one WAV file.
+
+    Args:
+        audio_path: Input WAV path.
+        vad_threshold: Relative RMS threshold.
+        vad_min_speech: Minimum speech duration in milliseconds.
+        vad_min_silence: Minimum silence gap in milliseconds.
+        vad_pad: Padding around detected segments in milliseconds.
+        out_suffix: Optional suffix appended to the output JSON filename.
+        out_dir: Optional output directory. Defaults to the input directory.
+        quiet: Suppress per-file logging when True.
+        force: Overwrite cached outputs when True.
+
+    Returns:
+        Path to the VAD JSON file.
+    """
     audio_path = Path(audio_path)
     suffix = out_suffix or ""
     target_dir = Path(out_dir) if out_dir is not None else audio_path.parent
@@ -345,6 +430,20 @@ def run_vad_dir(
     out_dir: Path | None = None,
     quiet: bool = True,
 ) -> None:
+    """
+    Step 3: Run VAD on every matching WAV file in a directory.
+
+    Args:
+        input_dir: Directory containing the VAD input WAV files.
+        vad_threshold: Relative RMS threshold.
+        vad_min_speech: Minimum speech duration in milliseconds.
+        vad_min_silence: Minimum silence gap in milliseconds.
+        vad_pad: Padding around detected segments in milliseconds.
+        force: Overwrite cached outputs when True.
+        out_suffix: Optional suffix appended to every output JSON filename.
+        out_dir: Optional output directory. Defaults to the input directory.
+        quiet: Suppress per-file logging when True.
+    """
     input_dir = Path(input_dir)
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")

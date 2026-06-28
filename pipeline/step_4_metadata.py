@@ -58,6 +58,15 @@ class SpeakerGroup:
 
 
 def load_vad_json(path: Path) -> list[ActiveSegment]:
+    """
+    Load one VAD JSON file as active segments.
+
+    Args:
+        path: Input VAD JSON path.
+
+    Returns:
+        List of active speech segments.
+    """
     with path.open("r", encoding="utf-8") as f:
         item = json.load(f)
 
@@ -95,6 +104,16 @@ def load_vad_json(path: Path) -> list[ActiveSegment]:
 
 
 def collect_groups(vad_root: Path, min_duration_ms: float) -> list[SpeakerGroup]:
+    """
+    Group VAD segments by source audio.
+
+    Args:
+        vad_root: Directory containing VAD JSON files.
+        min_duration_ms: Minimum segment duration in milliseconds.
+
+    Returns:
+        Speaker groups sorted by audio derivative.
+    """
     min_duration_sec = min_duration_ms / 1000.0
     paths = sorted(vad_root.rglob("*.json"))
     invalid = [str(path.relative_to(vad_root)) for path in paths if not path.name.endswith("_std_nml_vad.json")]
@@ -123,6 +142,17 @@ def collect_groups(vad_root: Path, min_duration_ms: float) -> list[SpeakerGroup]
 
 
 def sample_overlap_ratio(rng: random.Random, center: float, offset: float) -> float:
+    """
+    Sample one overlap ratio around a center value.
+
+    Args:
+        rng: Random number generator.
+        center: Center overlap ratio.
+        offset: Random offset around the center.
+
+    Returns:
+        A sampled overlap ratio.
+    """
     return rng.uniform(max(0.0, min(1.0, center - offset)), max(0.0, min(1.0, center + offset)))
 
 
@@ -131,6 +161,17 @@ def weighted_choice_without_replacement(
     count: int,
     rng: random.Random,
 ) -> list[SpeakerGroup]:
+    """
+    Pick speaker groups without replacement using duration as weight.
+
+    Args:
+        items: Candidate speaker groups.
+        count: Maximum number of groups to select.
+        rng: Random number generator.
+
+    Returns:
+        Selected speaker groups.
+    """
     pool = list(items)
     chosen: list[SpeakerGroup] = []
     for _ in range(min(count, len(pool))):
@@ -153,6 +194,20 @@ def weighted_choice_without_replacement(
 
 
 def build_source(seg: ActiveSegment, speaker: str, idx: int, start: float, end: float, gain_db: float) -> dict[str, Any]:
+    """
+    Convert one segment into the metadata source format.
+
+    Args:
+        seg: Active segment to serialize.
+        speaker: Local speaker label for the mixture.
+        idx: 1-based source index.
+        start: Mix start time in seconds.
+        end: Mix end time in seconds.
+        gain_db: Gain applied to the source.
+
+    Returns:
+        Source metadata dictionary.
+    """
     return {
         "source": f"s{idx}",
         "source_id": seg.source_id,
@@ -180,6 +235,21 @@ def find_fit(
     max_duration: float,
     rng: random.Random,
 ) -> tuple[int, float, float, float | None] | None:
+    """
+    Find a segment placement that fits the current mixture.
+
+    Args:
+        queue: Remaining segments for one speaker group.
+        prev: Previously placed source, if any.
+        same_speaker: Whether the next segment belongs to the same speaker.
+        overlap_center: Center overlap ratio.
+        overlap_offset: Random overlap offset.
+        max_duration: Mixture duration limit in seconds.
+        rng: Random number generator.
+
+    Returns:
+        A tuple of (queue index, start, end, ratio) or None if no fit is found.
+    """
     if same_speaker:
         start = prev["mix_end"] + (STEP_4_SAME_SPEAKER_GAP / 1000.0)
         for i, seg in enumerate(queue):
@@ -202,6 +272,16 @@ def find_fit(
 
 
 def compute_global_overlap(sources: list[dict[str, Any]], max_speakers_per_frame: int) -> tuple[list[dict[str, Any]], bool]:
+    """
+    Compute overlap intervals and verify the per-frame speaker limit.
+
+    Args:
+        sources: Mixture sources.
+        max_speakers_per_frame: Maximum number of overlapping speakers allowed.
+
+    Returns:
+        A tuple of (overlap intervals, ok flag).
+    """
     events: list[tuple[float, int, str, str]] = []
     for src in sources:
         events.append((float(src["mix_start"]), 1, str(src["speaker"]), str(src["source"])))
@@ -251,6 +331,23 @@ def build_candidate_mixture(
     max_speakers: int = STEP_4_MAX_SPEAKERS,
     max_speakers_per_frame: int = STEP_4_MAX_SPEAKERS_PER_FRAME,
 ) -> dict[str, Any] | None:
+    """
+    Build one valid mixture metadata record.
+
+    Args:
+        uri: Mixture identifier.
+        groups: Candidate speaker groups.
+        rng: Random number generator.
+        overlap_center: Center overlap ratio.
+        overlap_offset: Random overlap offset.
+        min_mixture_duration: Minimum mixture duration in milliseconds.
+        max_mixture_duration: Maximum mixture duration in milliseconds.
+        max_speakers: Maximum number of speakers in one mixture.
+        max_speakers_per_frame: Maximum number of overlapping speakers in one frame.
+
+    Returns:
+        Mixture metadata dictionary, or None when no valid candidate is found.
+    """
     if len(groups) < 2:
         return None
 
@@ -379,6 +476,14 @@ def build_candidate_mixture(
 
 
 def write_json(items: list[dict[str, Any]], path: Path, force: bool = False) -> None:
+    """
+    Write the generated metadata list to disk.
+
+    Args:
+        items: Mixture metadata records.
+        path: Output JSON path.
+        force: Overwrite existing file when True.
+    """
     if path.exists() and not force:
         raise FileExistsError(f"{path} already exists. Use --force to overwrite.")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -387,26 +492,13 @@ def write_json(items: list[dict[str, Any]], path: Path, force: bool = False) -> 
         f.write("\n")
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate VAD-based mixture metadata.")
-    parser.add_argument("--vad-dir", type=Path, required=True, help="Path to _std_nml_vad.json files produced by step_3_vad.py.")
-    parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--n-mixtures", type=int, required=True)
-    parser.add_argument("--overlap-ratio", type=float, default=STEP_4_OVERLAP_RATIO, help="Center overlap ratio.")
-    parser.add_argument("--overlap-random-offset", type=float, default=STEP_4_OVERLAP_RANDOM_OFFSET, help="Random offset around overlap ratio.")
-    parser.add_argument("--min-segment-duration", dest="min_segment_duration", type=float, default=STEP_4_MIN_SEGMENT_DURATION, help="Minimum active segment duration (ms).")
-    parser.add_argument("--min-mixture-duration", type=float, default=STEP_4_MIN_MIXTURE_DURATION, help="Minimum mixture duration (ms).")
-    parser.add_argument("--max-mixture-duration", type=float, default=STEP_4_MAX_MIXTURE_DURATION, help="Maximum mixture duration (ms).")
-    parser.add_argument("--seed", type=int, default=STEP_4_SEED)
-    parser.add_argument("--prefix", type=str, default="mix")
-    parser.add_argument("--max-build-trials", type=int, default=STEP_4_MAX_BUILD_TRIALS)
-    parser.add_argument("--max-speakers", "--max-number-speaker", dest="max_speakers", type=int, default=STEP_4_MAX_SPEAKERS)
-    parser.add_argument("--max-speakers-per-frame", dest="max_speakers_per_frame", type=int, default=STEP_4_MAX_SPEAKERS_PER_FRAME)
-    parser.add_argument("--force", action="store_true")
-    return parser.parse_args()
-
-
 def validate_args(args: argparse.Namespace) -> None:
+    """
+    Validate metadata generation arguments.
+
+    Args:
+        args: Parsed CLI arguments.
+    """
     if args.min_mixture_duration <= 0:
         raise ValueError("--min-mixture-duration must be positive.")
     if args.max_mixture_duration < args.min_mixture_duration:
@@ -421,10 +513,13 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--max-speakers-per-frame must be at least 1.")
 
 
-def main() -> None:
-    args = parse_args()
-    validate_args(args)
+def run_metadata_dir(args: argparse.Namespace) -> None:
+    """
+    Step 4: Generate mixture metadata from VAD JSON files.
 
+    Args:
+        args: Parsed CLI arguments.
+    """
     groups = collect_groups(args.vad_dir, args.min_segment_duration)
     if len(groups) < 2:
         raise RuntimeError("Need at least two speaker groups.")
@@ -466,6 +561,31 @@ def main() -> None:
     print("   • Source usage counts:")
     for name in sorted(usage_counts):
         print(f"  {name}: {usage_counts[name]}")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate VAD-based mixture metadata.")
+    parser.add_argument("--vad-dir", type=Path, required=True, help="Path to _std_nml_vad.json files produced by step_3_vad.py.")
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--n-mixtures", type=int, required=True)
+    parser.add_argument("--overlap-ratio", type=float, default=STEP_4_OVERLAP_RATIO, help="Center overlap ratio.")
+    parser.add_argument("--overlap-random-offset", type=float, default=STEP_4_OVERLAP_RANDOM_OFFSET, help="Random offset around overlap ratio.")
+    parser.add_argument("--min-segment-duration", dest="min_segment_duration", type=float, default=STEP_4_MIN_SEGMENT_DURATION, help="Minimum active segment duration (ms).")
+    parser.add_argument("--min-mixture-duration", type=float, default=STEP_4_MIN_MIXTURE_DURATION, help="Minimum mixture duration (ms).")
+    parser.add_argument("--max-mixture-duration", type=float, default=STEP_4_MAX_MIXTURE_DURATION, help="Maximum mixture duration (ms).")
+    parser.add_argument("--seed", type=int, default=STEP_4_SEED)
+    parser.add_argument("--prefix", type=str, default="mix")
+    parser.add_argument("--max-build-trials", type=int, default=STEP_4_MAX_BUILD_TRIALS)
+    parser.add_argument("--max-speakers", dest="max_speakers", type=int, default=STEP_4_MAX_SPEAKERS)
+    parser.add_argument("--max-speakers-per-frame", dest="max_speakers_per_frame", type=int, default=STEP_4_MAX_SPEAKERS_PER_FRAME)
+    parser.add_argument("--force", action="store_true")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    validate_args(args)
+    run_metadata_dir(args)
 
 
 if __name__ == "__main__":

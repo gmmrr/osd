@@ -21,6 +21,19 @@ from config.params import STEP_1_AUDIO_SAMPLE_RATE
 
 
 def standardize_single_audio(input_file: Path, force: bool = False) -> Path:
+    """
+    Step 1: Standardize one raw WAV file.
+
+    Converts the input into mono, resamples to the target sample rate, and
+    peak-normalizes the waveform before writing a 16-bit PCM WAV.
+
+    Args:
+        input_file: Raw input audio file.
+        force: Overwrite the cached standardized output when True.
+
+    Returns:
+        Path to the standardized WAV file.
+    """
     input_file = Path(input_file)
     out_path = input_file.with_name(f"{input_file.stem}_std.wav")
     if out_path.exists() and not force:
@@ -44,6 +57,13 @@ def standardize_single_audio(input_file: Path, force: bool = False) -> Path:
 
 
 def run_standardize_dir(input_dir: Path | str, force: bool = False) -> None:
+    """
+    Step 1: Standardize all raw WAV files in a directory.
+
+    Args:
+        input_dir: Directory containing raw audio files.
+        force: Overwrite cached outputs when True.
+    """
     input_dir = Path(input_dir)
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")

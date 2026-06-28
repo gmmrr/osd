@@ -36,6 +36,18 @@ def loudness_normalize(
     target_dbfs: float = STEP_2_NORMALIZE_TARGET_DBFS,
     limit_db: float = STEP_2_NORMALIZE_LIMIT_DB,
 ) -> tuple[np.ndarray, float]:
+    """
+    Normalize one waveform with LUFS-based loudness matching.
+
+    Args:
+        y: Mono waveform.
+        sample_rate: Waveform sample rate.
+        target_dbfs: Target loudness in dBFS.
+        limit_db: Maximum absolute gain allowed.
+
+    Returns:
+        A tuple of (normalized waveform, applied gain in dB).
+    """
     if pyln is None:
         raise RuntimeError(
             "pyloudnorm is required for LUFS normalization. "
@@ -65,6 +77,16 @@ def normalize_single_audio(
     input_file: Path,
     force: bool = False,
 ) -> Path:
+    """
+    Step 2: Normalize one standardized WAV file.
+
+    Args:
+        input_file: Standardized input WAV with the *_std.wav suffix.
+        force: Overwrite the cached normalized output when True.
+
+    Returns:
+        Path to the normalized WAV file.
+    """
     input_file = Path(input_file)
     if not input_file.name.endswith("_std.wav"):
         raise ValueError(f"Normalize expects *_std.wav input, got: {input_file.name}")
@@ -98,6 +120,13 @@ def run_normalize_dir(
     input_dir: Path | str,
     force: bool = False,
 ) -> None:
+    """
+    Step 2: Normalize all standardized WAV files in a directory.
+
+    Args:
+        input_dir: Directory containing standardized audio files.
+        force: Overwrite cached outputs when True.
+    """
     input_dir = Path(input_dir)
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")

@@ -27,6 +27,15 @@ from config.params import (
 
 
 def load_mix_records(path: Path) -> list[dict[str, Any]]:
+    """
+    Load the mix metadata JSON.
+
+    Args:
+        path: Path to mix.json.
+
+    Returns:
+        List of mix records.
+    """
     if path.name != "mix.json":
         raise ValueError(f"mix expects mix.json input, got: {path.name}")
     with path.open("r", encoding="utf-8") as f:
@@ -41,6 +50,16 @@ def load_mix_records(path: Path) -> list[dict[str, Any]]:
 
 
 def load_source_audio(path: Path, sample_rate: int) -> np.ndarray:
+    """
+    Load one source WAV file as mono float32 audio.
+
+    Args:
+        path: Source WAV path.
+        sample_rate: Expected sample rate.
+
+    Returns:
+        Mono waveform in shape (channels, samples).
+    """
     audio, sr = sf.read(str(path), always_2d=True, dtype="float32")
     if sr != sample_rate:
         raise ValueError(f"Unexpected sample rate for {path}: {sr} != {sample_rate}.")
@@ -50,6 +69,18 @@ def load_source_audio(path: Path, sample_rate: int) -> np.ndarray:
 
 
 def slice_audio(audio: np.ndarray, start_sec: float, end_sec: float, sample_rate: int) -> np.ndarray:
+    """
+    Slice one waveform using second-based coordinates.
+
+    Args:
+        audio: Mono waveform.
+        start_sec: Slice start time.
+        end_sec: Slice end time.
+        sample_rate: Audio sample rate.
+
+    Returns:
+        Sliced waveform.
+    """
     start = max(0, int(round(start_sec * sample_rate)))
     end = max(start, int(round(end_sec * sample_rate)))
     end = min(end, audio.shape[1])
@@ -59,6 +90,16 @@ def slice_audio(audio: np.ndarray, start_sec: float, end_sec: float, sample_rate
 
 
 def render_mix(record: dict[str, Any], output_path: Path) -> Path:
+    """
+    Render one mixture WAV from metadata.
+
+    Args:
+        record: One mix metadata record.
+        output_path: Destination WAV path.
+
+    Returns:
+        Path to the rendered mixture WAV.
+    """
     sample_rate = int(record.get("sample_rate", STEP_1_AUDIO_SAMPLE_RATE))
     duration = float(record["duration"])
     out_frames = int(round(duration * sample_rate))
@@ -88,6 +129,15 @@ def render_mix(record: dict[str, Any], output_path: Path) -> Path:
 
 
 def split_key(record: dict[str, Any]) -> str:
+    """
+    Determine the dataset split for one record.
+
+    Args:
+        record: One mix metadata record.
+
+    Returns:
+        train, dev, or test.
+    """
     raw_split = str(record.get("split", "")).strip().lower()
     if raw_split in {"train", "dev", "test"}:
         return raw_split
@@ -111,15 +161,45 @@ def split_key(record: dict[str, Any]) -> str:
 
 
 def format_rttm_line(uri: str, speaker: str, start: float, end: float) -> str:
+    """
+    Format one RTTM speaker turn line.
+
+    Args:
+        uri: Clip identifier.
+        speaker: Speaker label.
+        start: Segment start time in seconds.
+        end: Segment end time in seconds.
+
+    Returns:
+        One RTTM line.
+    """
     duration = max(0.0, end - start)
     return f"SPEAKER {uri} 1 {start:.6f} {duration:.6f} <NA> <NA> {speaker} <NA> <NA>"
 
 
 def format_uem_line(uri: str, duration: float) -> str:
+    """
+    Format one UEM line.
+
+    Args:
+        uri: Clip identifier.
+        duration: Clip duration in seconds.
+
+    Returns:
+        One UEM line.
+    """
     return f"{uri} 1 0.000000 {duration:.6f}"
 
 
 def write_text(path: Path, content: str, force: bool) -> None:
+    """
+    Write one text file.
+
+    Args:
+        path: Destination text path.
+        content: File content.
+        force: Overwrite existing file when True.
+    """
     if path.exists() and not force:
         raise FileExistsError(f"{path} already exists. Use --force to overwrite.")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -127,6 +207,14 @@ def write_text(path: Path, content: str, force: bool) -> None:
 
 
 def write_split_files(dataset_root: Path, records: list[dict[str, Any]], force: bool) -> None:
+    """
+    Render all mixtures and write the dataset manifests.
+
+    Args:
+        dataset_root: Dataset output root.
+        records: Mix metadata records.
+        force: Overwrite existing files when True.
+    """
     audio_dir = dataset_root / "audio"
     rttm_dir = dataset_root / "rttm"
     uem_dir = dataset_root / "uem"
@@ -200,8 +288,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
+def run_mix_dir(args: argparse.Namespace) -> None:
+    """
+    Step 5: Build the dataset directory from mix metadata.
+
+    Args:
+        args: Parsed CLI arguments.
+    """
     records = load_mix_records(args.input)
     if not records:
         raise RuntimeError(f"No mix records found in {args.input}.")
@@ -213,6 +306,11 @@ def main() -> None:
 
     print(f"✅ Output root: {args.output_dir}")
     print("   • Wrote: audio/, rttm/, uem/, lists/, database.yml")
+
+
+def main() -> None:
+    args = parse_args()
+    run_mix_dir(args)
 
 
 if __name__ == "__main__":
