@@ -5,171 +5,116 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any
+
+import torch
+from pyannote.core import Annotation
+from pyannote.database.protocol.segmentation import SegmentationProtocol
+from pyannote.database.util import load_lst, load_rttm, load_uem
 
 
-DEFAULT_DATABASE_NAME = "MixDataset"
-DEFAULT_PROTOCOL_NAME = "MixDiarization"
-DEFAULT_MODEL_DIR = Path("models/pyannote-segmentation-3.0")
+REPO_ROOT = Path(__file__).resolve().parent
+
+DEFAULT_MODEL_DIR = REPO_ROOT / "models/pyannote-segmentation-3.0"
 DEFAULT_CHUNK_DURATION = 10.0
 DEFAULT_BATCH_SIZE = 16
 DEFAULT_MAX_EPOCHS = 1
-DEFAULT_MAX_SPEAKERS_PER_CHUNK = 3
-DEFAULT_MAX_SPEAKERS_PER_FRAME = 2
+DEFAULT_SEED = 42
+DEFAULT_SAVE_TOP_K = 3
+DEFAULT_EARLY_STOPPING_PATIENCE = 0
+OVERLAP_LABEL = "overlap"
 
 SPLITS = ("train", "dev", "test")
-DATASET_DIRS = ("audio", "rttm", "uem", "lists")
 SPLIT_FILES = {
-    "train": {"list": "train.lst", "rttm": "train.rttm", "uem": "train.uem"},
-    "dev": {"list": "dev.lst", "rttm": "dev.rttm", "uem": "dev.uem"},
-    "test": {"list": "test.lst", "rttm": "test.rttm", "uem": "test.uem"},
+    "train": ("train.lst", "train.rttm", "train.uem"),
+    "dev": ("dev.lst", "dev.rttm", "dev.uem"),
+    "test": ("test.lst", "test.rttm", "test.uem"),
 }
 
-def collect_dataset_info(dataset_root: Path) -> tuple[dict[str, Path], dict[str, dict[str, Path]], dict[str, list[str]]]:
-    dirs = {name: dataset_root / name for name in DATASET_DIRS}
-    for label, path in dirs.items():
-        if not path.exists():
-            raise FileNotFoundError(f"Missing {label} directory under {dataset_root}.")
 
-    split_paths: dict[str, dict[str, Path]] = {}
-    split_uris: dict[str, list[str]] = {}
-    for split in SPLITS:
-        paths = {
-            "list": dirs["lists"] / SPLIT_FILES[split]["list"],
-            "rttm": dirs["rttm"] / SPLIT_FILES[split]["rttm"],
-            "uem": dirs["uem"] / SPLIT_FILES[split]["uem"],
-        }
-        for kind, path in paths.items():
-            if not path.exists():
-                raise FileNotFoundError(f"Missing {kind} file for split '{split}': {path}")
+def build_protocol(dataset_root: Path) -> SegmentationProtocol:
+    class LocalOverlapProtocol(SegmentationProtocol):
+        def __init__(self) -> None:
+            super().__init__(preprocessors={"audio": str(dataset_root / "audio" / "{uri}.wav")})
+            self._splits = {
+                split: {
+                    "uris": load_lst(dataset_root / "lists" / lst),
+                    "annotations": load_rttm(dataset_root / "rttm" / rttm),
+                    "annotated": load_uem(dataset_root / "uem" / uem),
+                }
+                for split, (lst, rttm, uem) in SPLIT_FILES.items()
+            }
 
-        uris = [line.strip() for line in paths["list"].read_text(encoding="utf-8").splitlines() if line.strip()]
-        if not uris:
-            raise RuntimeError(f"No URIs found in {paths['list']}.")
+        def train_iter(self):
+            return self._iter("train")
 
-        split_paths[split] = paths
-        split_uris[split] = uris
+        def development_iter(self):
+            return self._iter("dev")
 
-    for uri in sorted({uri for uris in split_uris.values() for uri in uris}):
-        audio_path = dirs["audio"] / f"{uri}.wav"
-        if not audio_path.exists():
-            raise FileNotFoundError(f"Missing audio file for URI '{uri}': {audio_path}")
+        def test_iter(self):
+            return self._iter("test")
 
-    train_set = set(split_uris["train"])
-    dev_set = set(split_uris["dev"])
-    test_set = set(split_uris["test"])
-    if train_set & dev_set:
-        raise RuntimeError("train/dev overlap detected.")
-    if train_set & test_set:
-        raise RuntimeError("train/test overlap detected.")
-    if dev_set & test_set:
-        raise RuntimeError("dev/test overlap detected.")
+        def _iter(self, split: str):
+            items = self._splits[split]
+            for uri in items["uris"]:
+                annotation = Annotation(uri=uri)
+                for segment in items["annotations"][uri].get_overlap():
+                    annotation[segment] = OVERLAP_LABEL
+                yield {"uri": uri, "annotation": annotation, "annotated": items["annotated"][uri], "classes": [OVERLAP_LABEL]}
 
-    return dirs, split_paths, split_uris
+    return LocalOverlapProtocol()
 
 
-def write_training_database_yml(
+def run_training(
     output_dir: Path,
-    audio_dir: Path,
-    split_paths: dict[str, dict[str, Path]],
-) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    database_yml = output_dir / "database.yml"
-    database_yml.write_text(
-        "\n".join(
-            [
-                "Databases:",
-                f"  {DEFAULT_DATABASE_NAME}:",
-                f"    - {audio_dir.resolve()}/{{uri}}.wav",
-                "Protocols:",
-                f"  {DEFAULT_DATABASE_NAME}:",
-                "    SpeakerDiarization:",
-                f"      {DEFAULT_PROTOCOL_NAME}:",
-                "        scope: file",
-                "        train:",
-                f"          uri: {split_paths['train']['list'].resolve()}",
-                f"          annotation: {split_paths['train']['rttm'].resolve()}",
-                f"          annotated: {split_paths['train']['uem'].resolve()}",
-                "        development:",
-                f"          uri: {split_paths['dev']['list'].resolve()}",
-                f"          annotation: {split_paths['dev']['rttm'].resolve()}",
-                f"          annotated: {split_paths['dev']['uem'].resolve()}",
-                "        test:",
-                f"          uri: {split_paths['test']['list'].resolve()}",
-                f"          annotation: {split_paths['test']['rttm'].resolve()}",
-                f"          annotated: {split_paths['test']['uem'].resolve()}",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    return database_yml
-
-
-def load_pretrained_model(model_dir: Path, task) -> Any:
-    from pyannote.audio import Model
-
-    model = Model.from_pretrained(model_dir)
-    model.task = task
-    return model
-
-
-def train_model(
-    output_dir: Path,
-    database_yml: Path,
+    protocol: SegmentationProtocol,
     model_dir: Path,
     batch_size: int,
     max_epochs: int,
     device: str,
+    save_top_k: int,
+    early_stopping_patience: int,
 ) -> Path:
-    from pyannote.database import registry
-    from pyannote.audio.tasks import SpeakerDiarization
-    from pytorch_lightning.callbacks import ModelCheckpoint
+    from pyannote.audio import Model
+    from pyannote.audio.tasks import MultiLabelSegmentation
+    from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
     import pytorch_lightning as pl
 
-    registry.load_database(str(database_yml))
-    protocol = registry.get_protocol(
-        f"{DEFAULT_DATABASE_NAME}.SpeakerDiarization.{DEFAULT_PROTOCOL_NAME}"
-    )
-
-    task = SpeakerDiarization(
+    model = Model.from_pretrained(str(model_dir))
+    pl.seed_everything(DEFAULT_SEED, workers=True)
+    task = MultiLabelSegmentation(
         protocol,
+        classes=[OVERLAP_LABEL],
         duration=DEFAULT_CHUNK_DURATION,
         batch_size=batch_size,
-        max_speakers_per_chunk=DEFAULT_MAX_SPEAKERS_PER_CHUNK,
-        max_speakers_per_frame=DEFAULT_MAX_SPEAKERS_PER_FRAME,
     )
+    model.task = task
 
-    model = load_pretrained_model(model_dir, task)
-    if model.task is not task:
-        raise RuntimeError("Task was not attached to model correctly.")
-    print("Model specifications:")
-    print(model.specifications)
-    print("Task specifications:")
-    print(task.specifications)
+    accelerator = "cuda" if device == "cuda" else "cpu" if device == "cpu" else ("cuda" if torch.cuda.is_available() else "cpu")
+    if device == "cuda" and accelerator == "cpu":
+        print("⚠️  CUDA requested but not available, falling back to CPU.")
 
-    checkpoint_dir = output_dir / "checkpoints"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_callback = ModelCheckpoint(
-        save_last=True,
-        save_top_k=0,
-        dirpath=str(checkpoint_dir),
-    )
+    monitor, mode = task.val_monitor
+    checkpoint_kwargs = {"dirpath": str(output_dir / "checkpoints"), "save_last": True, "save_top_k": save_top_k}
+    if save_top_k > 0 or early_stopping_patience > 0:
+        checkpoint_kwargs.update({"monitor": monitor, "mode": mode})
+
+    callbacks = [ModelCheckpoint(**checkpoint_kwargs)]
+    if early_stopping_patience > 0:
+        callbacks.append(EarlyStopping(monitor=monitor, mode=mode, patience=early_stopping_patience))
+
     trainer = pl.Trainer(
-        accelerator="auto" if device == "auto" else device,
+        accelerator=accelerator,
         devices=1,
         max_epochs=max_epochs,
         default_root_dir=str(output_dir),
-        callbacks=[checkpoint_callback],
+        callbacks=callbacks,
         log_every_n_steps=1,
     )
     trainer.fit(model)
 
-    last_checkpoint = getattr(checkpoint_callback, "last_model_path", "")
+    last_checkpoint = callbacks[0].last_model_path
     if not last_checkpoint:
         raise RuntimeError("Training finished but no checkpoint was saved.")
-
-    print(f"Last checkpoint: {last_checkpoint}")
     return Path(last_checkpoint)
 
 
@@ -180,6 +125,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--max-epochs", type=int, default=DEFAULT_MAX_EPOCHS)
+    parser.add_argument("--save-top-k", type=int, default=DEFAULT_SAVE_TOP_K)
+    parser.add_argument("--early-stopping-patience", type=int, default=DEFAULT_EARLY_STOPPING_PATIENCE)
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     return parser.parse_args()
 
@@ -189,23 +136,28 @@ def main() -> None:
     if not args.model_dir.exists():
         raise FileNotFoundError(f"Local model directory not found: {args.model_dir}")
 
-    dirs, split_paths, split_uris = collect_dataset_info(args.ground_truth)
-    database_yml = write_training_database_yml(args.output_dir, dirs["audio"], split_paths)
+    protocol = build_protocol(args.ground_truth)
 
-    print(f"Ground truth : {args.ground_truth}")
-    print(f"Database YML : {database_yml}")
+    print(f"🚀 Train in '{args.ground_truth}'")
+    print(f"   • Dataset audio: {args.ground_truth / 'audio'}")
+    print(f"   • Model: {args.model_dir}")
+    print(f"   • Batch size: {args.batch_size}")
+    print(f"   • Max epochs: {args.max_epochs}")
     for split in SPLITS:
-        print(f"{split}: {len(split_uris[split])} record(s)")
+        print(f"   • {split}: {len(load_lst(args.ground_truth / 'lists' / SPLIT_FILES[split][0]))} record(s)")
 
-    checkpoint_path = train_model(
+    checkpoint_path = run_training(
         output_dir=args.output_dir,
-        database_yml=database_yml,
+        protocol=protocol,
         model_dir=args.model_dir,
         batch_size=args.batch_size,
         max_epochs=args.max_epochs,
         device=args.device,
+        save_top_k=args.save_top_k,
+        early_stopping_patience=args.early_stopping_patience,
     )
 
+    print("✅ Training completed.")
     print(f"Checkpoint: {checkpoint_path}")
 
 
