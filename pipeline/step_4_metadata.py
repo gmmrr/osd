@@ -117,10 +117,6 @@ def collect_groups(vad_root: Path, min_duration_ms: float) -> list[SpeakerGroup]
     """
     min_duration_sec = min_duration_ms / 1000.0
     paths = sorted(vad_root.rglob("*.json"))
-    invalid = [str(path.relative_to(vad_root)) for path in paths if not path.name.endswith("_std_nml_vad.json")]
-    if invalid:
-        raise ValueError("Metadata expects only *_std_nml_vad.json inputs, got: " + ", ".join(invalid[:5]))
-
     grouped: dict[str, list[ActiveSegment]] = {}
     for path in paths:
         if not path.name.endswith("_std_nml_vad.json"):
