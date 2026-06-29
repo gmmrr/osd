@@ -161,8 +161,11 @@ def run_pipeline(args: argparse.Namespace) -> None:
 
     link_workspace_inputs(input_dir, work_dir, force=args.force)
 
+    print()
+    print("════════════════════════════════════════════════════════════")
     print(f"🚀 Run pipeline in '{input_dir}'")
     print(f"   • Workspace: {work_dir}")
+    print("════════════════════════════════════════════════════════════")
 
     if reuse_existing:
         print(f"   • Reusing existing mix.json with {existing_count} record(s)")
@@ -244,10 +247,13 @@ def run_pipeline(args: argparse.Namespace) -> None:
     )
     run_mix_dir(step5_args)
 
-    print("\n✅ Pipeline completed.")
+    print()
+    print("════════════════════════════════════════════════════════════")
+    print("✅ Pipeline completed.")
     print(f"   • Mix metadata: {mix_json}")
     print(f"   • Dataset root : {output_dir}")
     print(f"   • Workspace    : {work_dir}")
+    print("════════════════════════════════════════════════════════════")
 
 
 def parse_args() -> argparse.Namespace:
