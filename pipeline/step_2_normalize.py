@@ -22,6 +22,7 @@ from config.params import (
     STEP_2_NORMALIZE_TARGET_DBFS,
     STEP_2_NORMALIZE_LIMIT_DB,
 )
+from pipeline.utils.progress import write_progress
 
 
 def loudness_normalize(
@@ -65,6 +66,8 @@ def loudness_normalize(
 def normalize_single_audio(
     input_file: Path,
     force: bool = False,
+    index: int | None = None,
+    total: int | None = None,
 ) -> Path:
     """
     Step 2: Normalize one standardized WAV file.
@@ -82,7 +85,8 @@ def normalize_single_audio(
 
     out_path = input_file.with_name(f"{input_file.stem}_nml.wav")
     if out_path.exists() and not force:
-        print(f"↪ {input_file.name}: normalized file already exists (cached)")
+        if index is not None and total is not None:
+            write_progress(index, total)
         return out_path
 
     y, sr = sf.read(str(input_file), always_2d=True, dtype="float32")
@@ -93,7 +97,7 @@ def normalize_single_audio(
         y = scipy.signal.resample_poly(y, STEP_1_AUDIO_SAMPLE_RATE // g, sr // g)
         sr = STEP_1_AUDIO_SAMPLE_RATE
 
-    y, gain_db = loudness_normalize(
+    y, _gain_db = loudness_normalize(
         y,
         sr,
         target_dbfs=STEP_2_NORMALIZE_TARGET_DBFS,
@@ -101,7 +105,8 @@ def normalize_single_audio(
     )
 
     sf.write(out_path, y, sr, subtype="PCM_16")
-    print(f"Normalized: {input_file.name} -> {out_path.name} ({gain_db:+.2f} LU, {sr} Hz, mono, LUFS)")
+    if index is not None and total is not None:
+        write_progress(index, total)
     return out_path
 
 
@@ -120,11 +125,11 @@ def run_normalize_dir(
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
 
-    paths = [path for path in sorted(input_dir.iterdir()) if path.is_file() and path.suffix.lower() == ".wav"]
-    input_files = [path for path in paths if path.name.endswith("_std.wav")]
-    invalid_files = [path.name for path in paths if not path.name.endswith("_std.wav")]
-    if invalid_files:
-        raise ValueError(f"Normalize expects only *_std.wav inputs, got: {', '.join(invalid_files[:5])}")
+    input_files = [
+        path
+        for path in sorted(input_dir.iterdir())
+        if path.is_file() and path.suffix.lower() == ".wav" and path.name.endswith("_std.wav")
+    ]
     if not input_files:
         print(f"⚠️  No standardized files found in: {input_dir}")
         return
@@ -133,9 +138,11 @@ def run_normalize_dir(
     print(f"   • Files: {len(input_files)}")
     print(f"   • Analysis SR: {STEP_1_AUDIO_SAMPLE_RATE}")
 
-    for file in input_files:
-        normalize_single_audio(file, force=force)
+    total = len(input_files)
+    for index, file in enumerate(input_files, start=1):
+        normalize_single_audio(file, force=force, index=index, total=total)
 
+    print()
     print("✅ Normalization completed.")
 
 

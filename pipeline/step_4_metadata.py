@@ -34,6 +34,7 @@ from config.params import (
     STEP_4_SAME_SPEAKER_GAP,
     STEP_4_SEED,
 )
+from pipeline.utils.progress import write_progress
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,23 @@ class SpeakerGroup:
     key: str
     segments: list[ActiveSegment]
     total_active_duration: float
+
+
+def format_usage_histogram(usage_counts: Counter[str], max_items: int = 12, bar_width: int = 24) -> list[str]:
+    if not usage_counts:
+        return ["   • Source usage counts: (none)"]
+
+    items = sorted(usage_counts.items(), key=lambda item: (-item[1], item[0]))[:max_items]
+    highest = max(count for _, count in items) or 1
+    lines = ["   • Source usage counts:"]
+    for name, count in items:
+        filled = max(1, int(round(bar_width * count / highest)))
+        bar = "█" * filled + "░" * (bar_width - filled)
+        lines.append(f"     {name:<24} |{bar}| {count}")
+    remaining = len(usage_counts) - len(items)
+    if remaining > 0:
+        lines.append(f"     ... ({remaining} more)")
+    return lines
 
 
 def load_vad_json(path: Path) -> list[ActiveSegment]:
@@ -547,17 +565,21 @@ def run_metadata_dir(args: argparse.Namespace) -> None:
         )
         if record is not None:
             mixtures.append(record)
+            write_progress(len(mixtures), args.n_mixtures)
 
     write_json(mixtures, args.out, force=args.force)
-    usage_counts = Counter(name for mixture in mixtures for name in {src["audio_derivative"] for src in mixture["sources"]})
 
+    usage_counts = Counter(
+        name for mixture in mixtures for name in {src["audio_derivative"] for src in mixture["sources"]}
+    )
+    print()
     print(f"   • Active segments: {sum(len(group.segments) for group in groups)}")
-    print(f"   • Wrote mixtures: {len(mixtures)}")
     print(f"   • Attempts: {attempts}")
-    print(f"✅ Output: {args.out}")
-    print("   • Source usage counts:")
-    for name in sorted(usage_counts):
-        print(f"  {name}: {usage_counts[name]}")
+    for line in format_usage_histogram(usage_counts):
+        print(line)
+    print(f"   • Output: {args.out}")
+    print("✅ Metadata completed.")
+
 
 
 def parse_args() -> argparse.Namespace:

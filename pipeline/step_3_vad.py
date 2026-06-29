@@ -33,6 +33,7 @@ from config.params import (
     STEP_3_VAD_RMS_FRAME,
     STEP_3_VAD_RMS_HOP,
 )
+from pipeline.utils.progress import write_progress
 VAD_MODEL_NAME = "RMS-Energy-VAD"
 
 
@@ -310,6 +311,8 @@ def vad_single_audio(
     out_suffix: str | None = None,
     out_dir: Path | None = None,
     force: bool = False,
+    index: int | None = None,
+    total: int | None = None,
 ) -> Path:
     """
     Step 3: Run VAD on one WAV file.
@@ -333,7 +336,8 @@ def vad_single_audio(
     target_dir.mkdir(parents=True, exist_ok=True)
     out_path = target_dir / f"{audio_path.stem}_vad{suffix}.json"
     if out_path.exists() and not force:
-        print(f"↪ {audio_path.name}: VAD json already exists (cached)")
+        if index is not None and total is not None:
+            write_progress(index, total)
         return out_path
 
     wav_cpu, sr = _load_audio(audio_path)
@@ -409,7 +413,8 @@ def vad_single_audio(
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
-    print(f"VAD: {audio_path.name} -> {out_path.name}")
+    if index is not None and total is not None:
+        write_progress(index, total)
     return out_path
 
 
@@ -446,10 +451,10 @@ def run_vad_dir(
         return
 
     print(f"🚀 VAD in '{input_dir}'")
-    print(f"   • Device: cpu")
     print(f"   • Files: {len(input_files)}")
 
-    for file in input_files:
+    total = len(input_files)
+    for index, file in enumerate(input_files, start=1):
         vad_single_audio(
             file,
             vad_threshold=vad_threshold,
@@ -459,8 +464,11 @@ def run_vad_dir(
             out_suffix=out_suffix,
             out_dir=out_dir,
             force=force,
+            index=index,
+            total=total,
         )
 
+    print()
     print("✅ VAD completed.")
 
 

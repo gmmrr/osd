@@ -23,6 +23,7 @@ from config.params import (
     STEP_5_DEV_RATIO,
     STEP_5_TEST_RATIO,
 )
+from pipeline.utils.progress import write_progress
 SPLITS = ("train", "dev", "test")
 
 
@@ -89,7 +90,12 @@ def slice_audio(audio: np.ndarray, start_sec: float, end_sec: float, sample_rate
     return audio[:, start:end]
 
 
-def render_mix(record: dict[str, Any], output_path: Path) -> Path:
+def render_mix(
+    record: dict[str, Any],
+    output_path: Path,
+    index: int | None = None,
+    total: int | None = None,
+) -> Path:
     """
     Render one mixture WAV from metadata.
 
@@ -125,6 +131,8 @@ def render_mix(record: dict[str, Any], output_path: Path) -> Path:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(output_path), mix.T, sample_rate, subtype="FLOAT")
+    if index is not None and total is not None:
+        write_progress(index, total)
     return output_path
 
 
@@ -221,14 +229,17 @@ def write_split_files(dataset_root: Path, records: list[dict[str, Any]], force: 
     lists_dir = dataset_root / "lists"
 
     split_records: dict[str, list[dict[str, Any]]] = {split: [] for split in SPLITS}
-    for record in records:
+    total_records = len(records)
+    for index, record in enumerate(records, start=1):
         split = split_key(record)
         split_records[split].append(record)
 
         uri = str(record.get("uri", "mix"))
         audio_path = audio_dir / f"{uri}.wav"
         if not audio_path.exists() or force:
-            render_mix(record, audio_path)
+            render_mix(record, audio_path, index=index, total=total_records)
+        else:
+            write_progress(index, total_records)
 
     for split, items in split_records.items():
         rttm_lines: list[str] = []
@@ -304,8 +315,10 @@ def run_mix_dir(args: argparse.Namespace) -> None:
     print(f"   • Records: {len(records)}")
     write_split_files(args.output_dir, records, force=args.force)
 
-    print(f"✅ Output root: {args.output_dir}")
+    print()
     print("   • Wrote: audio/, rttm/, uem/, lists/, database.yml")
+    print(f"   • Output root: {args.output_dir}")
+    print("✅ Mix completed.")
 
 
 def main() -> None:

@@ -16,12 +16,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from config.params import (
-    STEP_1_AUDIO_SAMPLE_RATE
-)
+from config.params import STEP_1_AUDIO_SAMPLE_RATE
+from pipeline.utils.progress import write_progress
 
 
-def standardize_single_audio(input_file: Path, force: bool = False) -> Path:
+def standardize_single_audio(
+    input_file: Path,
+    force: bool = False,
+    index: int | None = None,
+    total: int | None = None,
+) -> Path:
     """
     Step 1: Standardize one raw WAV file.
 
@@ -38,7 +42,8 @@ def standardize_single_audio(input_file: Path, force: bool = False) -> Path:
     input_file = Path(input_file)
     out_path = input_file.with_name(f"{input_file.stem}_std.wav")
     if out_path.exists() and not force:
-        print(f"↪ {input_file.name}: standardized file already exists (cached)")
+        if index is not None and total is not None:
+            write_progress(index, total)
         return out_path
 
     audio, sr_in = sf.read(str(input_file), always_2d=True, dtype="float32")
@@ -53,7 +58,8 @@ def standardize_single_audio(input_file: Path, force: bool = False) -> Path:
         audio = audio / peak
 
     sf.write(out_path, audio, sr_in, subtype="PCM_16")
-    print(f"Standardized: {input_file.name} -> {out_path.name} ({sr_in} Hz, mono)")
+    if index is not None and total is not None:
+        write_progress(index, total)
     return out_path
 
 
@@ -85,9 +91,11 @@ def run_standardize_dir(input_dir: Path | str, force: bool = False) -> None:
     print(f"   • Files: {len(input_files)}")
     print(f"   • Target SR: {STEP_1_AUDIO_SAMPLE_RATE}")
 
-    for file in input_files:
-        standardize_single_audio(file, force=force)
+    total = len(input_files)
+    for index, file in enumerate(input_files, start=1):
+        standardize_single_audio(file, force=force, index=index, total=total)
 
+    print()
     print("✅ Standardization completed.")
 
 
