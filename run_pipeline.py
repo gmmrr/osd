@@ -114,6 +114,7 @@ def build_step4_args(
     args: argparse.Namespace,
     force: bool,
 ) -> argparse.Namespace:
+    max_build_trials = max(args.max_build_trials, n_mixtures * 2)
     return argparse.Namespace(
         vad_dir=vad_dir,
         out=out,
@@ -125,7 +126,7 @@ def build_step4_args(
         max_mixture_duration=args.max_mixture_duration,
         seed=args.seed,
         prefix="mix",
-        max_build_trials=args.max_build_trials,
+        max_build_trials=max_build_trials,
         max_speakers=args.max_speakers,
         max_speakers_per_frame=args.max_speakers_per_frame,
         force=force,
