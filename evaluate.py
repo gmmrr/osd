@@ -61,14 +61,15 @@ def load_hypothesis(path: Path) -> dict[str, Timeline]:
             hypothesis[uri] = load_timeline(intervals, uri)
     return hypothesis
 
-
-def main() -> None:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate overlapped speech detection.")
     parser.add_argument("--ground-truth", type=Path, required=True)
     parser.add_argument("--hypothesis", type=Path, required=True)
-    parser.add_argument("--collar", type=float, default=0.0)
-    parser.add_argument("--skip-overlap", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument("--tolerance", type=float, default=0.0)
+    return parser.parse_args()
+
+def main() -> None:
+    args = parse_args()
 
     rttm, uem, splits = load_ground_truth(args.ground_truth)
     hypothesis = load_hypothesis(args.hypothesis)
@@ -79,9 +80,9 @@ def main() -> None:
         if not single_file:
             uris = [uri for uri in uris if uri in hypothesis]
 
-        precision = DetectionPrecision(collar=args.collar, skip_overlap=args.skip_overlap)
-        recall = DetectionRecall(collar=args.collar, skip_overlap=args.skip_overlap)
-        der = DetectionErrorRate(collar=args.collar, skip_overlap=args.skip_overlap)
+        precision = DetectionPrecision(collar=args.tolerance)
+        recall = DetectionRecall(collar=args.tolerance)
+        der = DetectionErrorRate(collar=args.tolerance)
 
         for uri in uris:
             ref = Annotation(uri=uri)
@@ -97,7 +98,7 @@ def main() -> None:
         p = abs(precision)
         r = abs(recall)
         f1 = 0.0 if p + r == 0 else 2 * p * r / (p + r)
-        print(f"{split}: files={len(uris)} P={100*p:.2f}% R={100*r:.2f}% F1={100*f1:.2f}% DER={100*abs(der):.2f}%")
+        print(f"{split} ({len(uris)} files): Precision={100*p:.2f}% Recall={100*r:.2f}% F1={100*f1:.2f}% DER={100*abs(der):.2f}%")
 
 
 if __name__ == "__main__":
