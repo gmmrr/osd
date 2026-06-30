@@ -1,102 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Pyannote segmentation-3.0 overlapped speech detection pipeline.
-
-This script loads a local copy of ``pyannote/segmentation-3.0`` with
-``pyannote.audio.Inference`` and writes JSON files describing regions where
-two or more speakers are active.
-
-Default demo input:
-  - data/test_osdc/IyLqUS7hRvo_std_vocals.wav
-"""
-
 from __future__ import annotations
 
 import argparse
 import json
-from functools import wraps
 from math import gcd
 from pathlib import Path
-from typing import Dict, List
 
 import numpy as np
 import scipy.signal
 import soundfile as sf
 import torch
-import torchaudio
 
 
-if not hasattr(torchaudio, "AudioMetaData"):
-    class _AudioMetaData:
-        """Compatibility shim for pyannote.audio import-time type hints."""
+REPO_ROOT = Path(__file__).resolve().parent
 
-        def __init__(
-            self,
-            num_frames: int,
-            sample_rate: int,
-            num_channels: int = 1,
-            bits_per_sample: int = 16,
-            encoding: str = "PCM_S",
-        ) -> None:
-            self.num_frames = num_frames
-            self.sample_rate = sample_rate
-            self.num_channels = num_channels
-            self.bits_per_sample = bits_per_sample
-            self.encoding = encoding
-
-    torchaudio.AudioMetaData = _AudioMetaData  # type: ignore[attr-defined]
-
-if not hasattr(torchaudio, "list_audio_backends"):
-    torchaudio.list_audio_backends = lambda: ["soundfile"]  # type: ignore[attr-defined]
-
-if not hasattr(torchaudio, "info"):
-    def _info(audio_file, backend=None):
-        del backend
-        info = sf.info(str(audio_file))
-        return torchaudio.AudioMetaData(  # type: ignore[attr-defined]
-            num_frames=info.frames,
-            sample_rate=info.samplerate,
-            num_channels=info.channels,
-            bits_per_sample=16,
-            encoding=getattr(info, "subtype", "PCM_S"),
-        )
-
-    torchaudio.info = _info  # type: ignore[attr-defined]
-
-
-def _allow_pyannote_checkpoint_globals() -> None:
-    """Allow safe loading of pyannote checkpoints under PyTorch 2.6+."""
-    try:
-        from torch.serialization import add_safe_globals
-        from torch.torch_version import TorchVersion
-        from pyannote.audio.core.task import Problem, Resolution, Specifications
-
-        add_safe_globals([TorchVersion, Problem, Resolution, Specifications])
-    except Exception:
-        pass
-
-
-def _patch_torch_load_weights_only() -> None:
-    """Force legacy checkpoint loads to use weights_only=False."""
-    try:
-        original_load = torch.load
-
-        @wraps(original_load)
-        def patched_load(*args, **kwargs):
-            kwargs["weights_only"] = False
-            return original_load(*args, **kwargs)
-
-        torch.load = patched_load  # type: ignore[assignment]
-    except Exception:
-        pass
-
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-DEFAULT_INPUT = REPO_ROOT / "data/test_osdc/IyLqUS7hRvo_std_vocals.wav"
+DEFAULT_INPUT_DIR = REPO_ROOT / "data/test_osdc"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "data/test_osdc/local_segmentation_3_0"
 DEFAULT_MODEL_PATH = REPO_ROOT / "models/pyannote-segmentation-3.0"
-DEFAULT_PIPELINE_NAME = "pyannote.audio.Inference"
 DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_ONSET = 0.2
 DEFAULT_OFFSET = 0.1
@@ -104,240 +25,170 @@ DEFAULT_MIN_DURATION_ON = 0.0
 DEFAULT_MIN_DURATION_OFF = 0.0
 
 
-def _resolve_device(device: str) -> str:
+def resolve_device(device: str) -> torch.device:
     if device == "auto":
-        return "cuda" if torch.cuda.is_available() else "cpu"
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device == "cuda" and not torch.cuda.is_available():
         print("⚠️  CUDA requested but not available, falling back to CPU.")
-        return "cpu"
-    return device
+        return torch.device("cpu")
+    return torch.device(device)
 
 
-def _collect_audio_files(path: Path) -> List[Path]:
-    if path.is_file():
-        if path.suffix.lower() != ".wav":
-            raise ValueError(f"Expected a .wav file, got: {path}")
-        return [path]
-    if path.is_dir():
-        files = sorted(p for p in path.iterdir() if p.is_file() and p.suffix.lower() == ".wav")
-        if not files:
-            raise FileNotFoundError(f"No audio files found in directory: {path}")
-        return files
-    raise FileNotFoundError(
-        f"Input path does not exist: {path}. "
-        "If you are using the default input, check that the file exists under "
-        "data/test_osdc/ at the repository root."
-    )
+def discover_input_files(path: Path) -> list[Path]:
+    if not path.exists():
+        raise FileNotFoundError(f"Input directory does not exist: {path}")
+    if not path.is_dir():
+        raise NotADirectoryError(f"Input path must be a directory: {path}")
+    return sorted(p for p in path.iterdir() if p.is_file() and p.suffix.lower() == ".wav")
 
 
-def _load_audio_in_memory(audio_path: Path, sample_rate: int = DEFAULT_SAMPLE_RATE) -> Dict[str, object]:
-    waveform, sr = sf.read(str(audio_path), always_2d=True, dtype="float32")
-    waveform = waveform.T
-
+def load_audio(path: Path, sample_rate: int) -> dict[str, object]:
+    waveform, sr = sf.read(str(path), always_2d=True, dtype="float32")
+    waveform = waveform.mean(axis=1)
     if sr != sample_rate:
-        divisor = gcd(sample_rate, sr)
-        up = sample_rate // divisor
-        down = sr // divisor
-        resampled = []
-        for channel in waveform:
-            resampled.append(scipy.signal.resample_poly(channel, up, down).astype(np.float32))
-        max_len = max((len(channel) for channel in resampled), default=0)
-        waveform = np.stack(
-            [np.pad(channel, (0, max_len - len(channel)), mode="constant") for channel in resampled],
-            axis=0,
-        )
-
-    if waveform.shape[0] > 1:
-        waveform = waveform.mean(axis=0, keepdims=True).astype(np.float32)
-
+        factor = gcd(sample_rate, sr)
+        waveform = scipy.signal.resample_poly(waveform, sample_rate // factor, sr // factor).astype(np.float32)
     return {
-        "waveform": torch.from_numpy(np.asarray(waveform, dtype=np.float32)),
+        "waveform": torch.from_numpy(waveform[None, :].astype(np.float32)),
         "sample_rate": sample_rate,
     }
 
 
-def _load_model(model_path: Path, device: str):
-    _allow_pyannote_checkpoint_globals()
-    original_load = torch.load
-    _patch_torch_load_weights_only()
+def load_model(model_path: Path, device: torch.device):
+    from pyannote.audio import Model, Inference
 
-    from pyannote.audio import Model
-
-    try:
-        if not model_path.exists():
-            raise FileNotFoundError(f"Local model directory not found: {model_path}")
-
-        model = Model.from_pretrained(str(model_path))
-    finally:
-        torch.load = original_load  # type: ignore[assignment]
-
-    if model is None:
-        raise RuntimeError(
-            f"Failed to load local pyannote model: {model_path}."
-        )
-
-    model.to(torch.device(device))
-    model.eval()
-    return model
+    model = Model.from_pretrained(str(model_path))
+    return Inference(
+        model,
+        device=device,
+        pre_aggregation_hook=lambda scores: scores,
+    )
 
 
-def _load_detector(model_path: Path, device: str):
-    from pyannote.audio import Inference
+def smooth_mask(mask: np.ndarray, max_gap: int, min_len: int) -> np.ndarray:
+    if mask.size == 0:
+        return mask
 
-    model = _load_model(model_path=model_path, device=device)
-    return Inference(model, pre_aggregation_hook=lambda scores: scores)
+    while True:
+        updated = mask.copy()
 
+        start = None
+        for idx, value in enumerate(updated):
+            if not value and start is None:
+                start = idx
+            elif value and start is not None:
+                if start > 0 and idx < len(updated) and idx - start <= max_gap:
+                    updated[start:idx] = True
+                start = None
 
-def _to_overlap_score(data: np.ndarray) -> np.ndarray:
-    if data.ndim != 2 or data.shape[1] == 0:
-        return np.zeros(0, dtype=np.float32)
-    if data.shape[1] < 2:
-        return np.zeros(data.shape[0], dtype=np.float32)
-    sorted_scores = np.sort(np.asarray(data, dtype=np.float32), axis=1)
-    return sorted_scores[:, -2]
+        start = None
+        for idx, value in enumerate(updated):
+            if value and start is None:
+                start = idx
+            elif not value and start is not None:
+                if idx - start < min_len:
+                    updated[start:idx] = False
+                start = None
 
-
-def _fill_short_inactive_gaps(active: np.ndarray, max_gap_frames: int) -> np.ndarray:
-    if max_gap_frames <= 0 or active.size == 0:
-        return active
-
-    filled = active.copy()
-    idx = 0
-    size = len(filled)
-    while idx < size:
-        if filled[idx]:
-            idx += 1
-            continue
-        start = idx
-        while idx < size and not filled[idx]:
-            idx += 1
-        end = idx
-        gap = end - start
-        has_left = start > 0 and filled[start - 1]
-        has_right = end < size and filled[end]
-        if has_left and has_right and gap <= max_gap_frames:
-            filled[start:end] = True
-    return filled
+        if np.array_equal(updated, mask):
+            return updated
+        mask = updated
 
 
-def _remove_short_active_runs(active: np.ndarray, min_frames: int) -> np.ndarray:
-    if min_frames <= 1 or active.size == 0:
-        return active
+def collapse_scores(scores) -> np.ndarray | None:
+    if not hasattr(scores, "data"):
+        return None
 
-    cleaned = active.copy()
-    idx = 0
-    size = len(cleaned)
-    while idx < size:
-        if not cleaned[idx]:
-            idx += 1
-            continue
-        start = idx
-        while idx < size and cleaned[idx]:
-            idx += 1
-        end = idx
-        if end - start < min_frames:
-            cleaned[start:end] = False
-    return cleaned
+    data = np.asarray(scores.data, dtype=np.float32)
+    data = np.squeeze(data)
+    if data.ndim == 1:
+        return data
+    if data.ndim != 2:
+        raise ValueError(f"Expected aggregated 1D/2D scores, got shape {data.shape}.")
+    if data.shape[1] == 1:
+        return data[:, 0]
+    if data.min() < 0.0 or data.max() > 1.0:
+        data = 1.0 / (1.0 + np.exp(-data))
+    return np.sort(data, axis=1)[:, -2]
 
 
-def _scores_to_overlap_segments(
+def scores_to_segments(
     scores,
-    onset: float = DEFAULT_ONSET,
-    offset: float = DEFAULT_OFFSET,
-    min_duration_on: float = DEFAULT_MIN_DURATION_ON,
-    min_duration_off: float = DEFAULT_MIN_DURATION_OFF,
-) -> List[Dict[str, object]]:
-    segments: List[Dict[str, object]] = []
-    if not hasattr(scores, "data") or scores.data.ndim != 2:
-        return segments
+    onset: float,
+    offset: float,
+    min_duration_on: float,
+    min_duration_off: float,
+) -> list[dict[str, object]]:
+    data = collapse_scores(scores)
+    if data is None:
+        return []
 
-    data = np.asarray(scores.data)
+    active = np.zeros_like(data, dtype=bool)
+    running = False
+    for i, score in enumerate(data):
+        if not running and score >= onset:
+            running = True
+        elif running and score < offset:
+            running = False
+        active[i] = running
+
     window = scores.sliding_window
-    overlap_score = _to_overlap_score(data)
-    if overlap_score.size == 0:
-        return segments
+    frame_step = float(getattr(window, "step", 0.0) or getattr(window, "duration", 0.0) or 0.0)
+    if frame_step <= 0:
+        frame_step = 1.0 / DEFAULT_SAMPLE_RATE
 
-    active = np.zeros_like(overlap_score, dtype=bool)
-    is_active = False
-    for idx, score in enumerate(overlap_score):
-        if not is_active and score >= onset:
-            is_active = True
-        elif is_active and score < offset:
-            is_active = False
-        active[idx] = is_active
+    active = smooth_mask(
+        active,
+        max(0, int(round(min_duration_off / frame_step))),
+        max(0, int(round(min_duration_on / frame_step))),
+    )
 
-    step = float(getattr(window, "step", 0.0) or 0.0)
-    duration = float(getattr(window, "duration", 0.0) or 0.0)
-    frame_seconds = step if step > 0 else duration
-    if frame_seconds <= 0:
-        frame_seconds = 1.0 / DEFAULT_SAMPLE_RATE
-
-    off_frames = int(round(min_duration_off / frame_seconds))
-    on_frames = max(1, int(round(min_duration_on / frame_seconds)))
-    active = _fill_short_inactive_gaps(active, off_frames)
-    active = _remove_short_active_runs(active, on_frames)
-
+    segments: list[dict[str, object]] = []
     start_idx = None
-    for idx, is_active in enumerate(active):
-        if is_active and start_idx is None:
+    for idx, value in enumerate(active):
+        if value and start_idx is None:
             start_idx = idx
-        elif not is_active and start_idx is not None:
+        elif not value and start_idx is not None:
             start = float(window[start_idx].start)
             end = float(window[idx - 1].end)
             if end > start:
-                segments.append(
-                    {
-                        "start": round(start, 3),
-                        "end": round(end, 3),
-                        "duration": round(end - start, 3),
-                    }
-                )
+                segments.append({"start": round(start, 3), "end": round(end, 3), "duration": round(end - start, 3)})
             start_idx = None
 
     if start_idx is not None:
         start = float(window[start_idx].start)
         end = float(window[len(active) - 1].end)
         if end > start:
-            segments.append(
-                {
-                    "start": round(start, 3),
-                    "end": round(end, 3),
-                    "duration": round(end - start, 3),
-                }
-            )
+            segments.append({"start": round(start, 3), "end": round(end, 3), "duration": round(end - start, 3)})
 
     return segments
 
 
-def detect_single(
+def detect_file(
     detector,
     input_path: Path,
     output_dir: Path,
     model_path: Path,
-    sample_rate: int = DEFAULT_SAMPLE_RATE,
-    onset: float = DEFAULT_ONSET,
-    offset: float = DEFAULT_OFFSET,
-    min_duration_on: float = DEFAULT_MIN_DURATION_ON,
-    min_duration_off: float = DEFAULT_MIN_DURATION_OFF,
-    force: bool = False,
+    sample_rate: int,
+    onset: float,
+    offset: float,
+    min_duration_on: float,
+    min_duration_off: float,
+    force: bool,
+    debug: bool = False,
 ) -> tuple[Path, bool]:
     output_dir.mkdir(parents=True, exist_ok=True)
-
     out_json = output_dir / f"{input_path.stem}_osd.json"
-    if out_json.exists():
-        if not force:
-            return out_json, True
+    if out_json.exists() and not force:
+        return out_json, True
 
-    audio = _load_audio_in_memory(input_path, sample_rate=sample_rate)
-    result = detector(audio)
-
-    overlaps = _scores_to_overlap_segments(
-        result,
-        onset=onset,
-        offset=offset,
-        min_duration_on=min_duration_on,
-        min_duration_off=min_duration_off,
-    )
+    audio = load_audio(input_path, sample_rate)
+    scores = detector(audio)
+    if debug and hasattr(scores, "data"):
+        data = np.asarray(scores.data, dtype=np.float32)
+        print(f"   • Score shape: {tuple(data.shape)}")
+        print(f"   • Score range: {float(np.min(data)):.4f} .. {float(np.max(data)):.4f}")
+    overlaps = scores_to_segments(scores, onset, offset, min_duration_on, min_duration_off)
     overlap_duration = round(sum(item["duration"] for item in overlaps), 3)
     input_duration = round(float(audio["waveform"].shape[-1]) / sample_rate, 3)
 
@@ -345,7 +196,7 @@ def detect_single(
         "uri": input_path.stem,
         "input": str(input_path.resolve()),
         "model_path": str(model_path.resolve()),
-        "pipeline_name": DEFAULT_PIPELINE_NAME,
+        "pipeline_name": "pyannote.audio.Inference",
         "sample_rate": sample_rate,
         "onset": onset,
         "offset": offset,
@@ -361,128 +212,87 @@ def detect_single(
 
     with out_json.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
-
     return out_json, False
 
 
 def run_detection(
-    input_path: Path | str = DEFAULT_INPUT,
+    input_dir: Path | str = DEFAULT_INPUT_DIR,
     output_dir: Path | str = DEFAULT_OUTPUT_DIR,
     model_path: Path | str = DEFAULT_MODEL_PATH,
     device: str = "auto",
-    sample_rate: int = DEFAULT_SAMPLE_RATE,
     onset: float = DEFAULT_ONSET,
     offset: float = DEFAULT_OFFSET,
     min_duration_on: float = DEFAULT_MIN_DURATION_ON,
     min_duration_off: float = DEFAULT_MIN_DURATION_OFF,
     force: bool = False,
-) -> tuple[int, int]:
-    input_path = Path(input_path)
+) -> None:
+    input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     model_path = Path(model_path)
 
-    if offset > onset:
-        raise ValueError(f"offset must be <= onset, got offset={offset}, onset={onset}")
+    input_files = discover_input_files(input_dir)
+    if not input_files:
+        print(f"⚠️  No WAV files found in: {input_dir}")
+        return
 
-    used_device = _resolve_device(device)
-    detector = _load_detector(model_path=model_path, device=used_device)
+    detector = load_model(model_path, resolve_device(device))
 
-    input_files = _collect_audio_files(input_path)
+    print(f"🚀 OSD in '{input_dir}'")
+    print(f"   • Files: {len(input_files)}")
+    print(f"   • Sample rate: {DEFAULT_SAMPLE_RATE}")
+    print(f"   • Model: {model_path}")
+
     skipped = 0
     total = len(input_files)
-    for index, in_file in enumerate(input_files, start=1):
-        out_json, did_skip = detect_single(
+    for index, file_path in enumerate(input_files, start=1):
+        _, did_skip = detect_file(
             detector=detector,
-            input_path=in_file,
+            input_path=file_path,
             output_dir=output_dir,
             model_path=model_path,
-            sample_rate=sample_rate,
+            sample_rate=DEFAULT_SAMPLE_RATE,
             onset=onset,
             offset=offset,
             min_duration_on=min_duration_on,
             min_duration_off=min_duration_off,
             force=force,
+            debug=index == 1,
         )
         skipped += int(did_skip)
-        progress = 100.0 if total == 0 else 100.0 * index / total
-        print(f"Progress: {progress:6.2f}% ({index}/{total}) | Skipped: {skipped}/{total}", end="\r", flush=True)
+        print(f"Progress: {100.0 * index / total:6.2f}% ({index}/{total}) | Skipped: {skipped}/{total}", end="\r", flush=True)
 
-    if total > 0:
-        print()
-    return skipped, total
+    print()
+    print("✅ OSD completed.")
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run pyannote segmentation-3.0 overlapped speech detection and output JSON.")
-    parser.add_argument(
-        "--input",
-        type=Path,
-        default=DEFAULT_INPUT,
-        help="Input audio file or directory. Default: data/test_osdc/IyLqUS7hRvo_std_vocals.wav",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=DEFAULT_OUTPUT_DIR,
-        help="Directory where OSDC JSON files will be written.",
-    )
-    parser.add_argument(
-        "--model-path",
-        type=Path,
-        default=DEFAULT_MODEL_PATH,
-        help="Local pyannote model directory.",
-    )
+    parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR, help="Input directory containing WAV files.")
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Directory where OSD JSON files will be written.")
+    parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL_PATH, help="Local pyannote model directory.")
     parser.add_argument("--onset", type=float, default=DEFAULT_ONSET, help="Start overlap when score >= onset.")
     parser.add_argument("--offset", type=float, default=DEFAULT_OFFSET, help="End overlap when score < offset.")
-    parser.add_argument(
-        "--min-duration-on",
-        type=float,
-        default=DEFAULT_MIN_DURATION_ON,
-        help="Remove predicted overlap segments shorter than this many seconds.",
-    )
-    parser.add_argument(
-        "--min-duration-off",
-        type=float,
-        default=DEFAULT_MIN_DURATION_OFF,
-        help="Fill non-overlap gaps shorter than this many seconds.",
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Overwrite existing OSD JSON files.",
-    )
-    parser.add_argument(
-        "--device",
-        choices=["auto", "cpu", "cuda"],
-        default="auto",
-        help="Execution device.",
-    )
-    parser.add_argument(
-        "--sample-rate",
-        type=int,
-        default=DEFAULT_SAMPLE_RATE,
-        help="Target sample rate for the model.",
-    )
-    return parser
+    parser.add_argument("--min-duration-on", type=float, default=DEFAULT_MIN_DURATION_ON, help="Remove predicted overlap segments shorter than this many seconds.")
+    parser.add_argument("--min-duration-off", type=float, default=DEFAULT_MIN_DURATION_OFF, help="Fill non-overlap gaps shorter than this many seconds.")
+    parser.add_argument("--force", action="store_true", help="Overwrite existing OSD JSON files.")
+    parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto", help="Execution device.")
+    return parser.parse_args()
 
 
 def main() -> None:
-    args = _build_arg_parser().parse_args()
-
+    args = parse_args()
     run_detection(
-        input_path=args.input,
+        input_dir=args.input_dir,
         output_dir=args.output_dir,
         model_path=args.model_path,
         device=args.device,
-        sample_rate=args.sample_rate,
         onset=args.onset,
         offset=args.offset,
         min_duration_on=args.min_duration_on,
         min_duration_off=args.min_duration_off,
         force=args.force,
     )
-
-    print(f"Saved to: {args.output_dir}")
+    print(f"Saved: {args.output_dir}")
 
 
 if __name__ == "__main__":
