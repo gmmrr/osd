@@ -3,4 +3,5 @@ data/
 .venv/
 __pycache__/
 out/
-external_repo
+external_repo/
+onset_offset
