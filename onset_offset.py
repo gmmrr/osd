@@ -56,6 +56,57 @@ def score_combo(rttm_by_uri, uem_by_uri, uris: list[str], hypothesis_by_uri, tol
     }
 
 
+def write_results_csv(results: list[dict[str, object]]) -> None:
+    with CSV_PATH.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["index", "total", "onset", "offset", "precision", "recall", "f1", "der", "work_dir"],
+        )
+        writer.writeheader()
+        writer.writerows(results)
+
+
+def plot_results(results: list[dict[str, object]], onsets: list[float], offsets: list[float]) -> None:
+    shape = (len(offsets), len(onsets))
+    precision_grid = np.full(shape, np.nan, dtype=float)
+    recall_grid = np.full(shape, np.nan, dtype=float)
+    f1_grid = np.full(shape, np.nan, dtype=float)
+    der_grid = np.full(shape, np.nan, dtype=float)
+    onset_index = {value: idx for idx, value in enumerate(onsets)}
+    offset_index = {value: idx for idx, value in enumerate(offsets)}
+    for row in results:
+        i = offset_index[float(row["offset"])]
+        j = onset_index[float(row["onset"])]
+        precision_grid[i, j] = float(row["precision"])
+        recall_grid[i, j] = float(row["recall"])
+        f1_grid[i, j] = float(row["f1"])
+        der_grid[i, j] = float(row["der"])
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), constrained_layout=True)
+    plots = [
+        ("Precision", precision_grid, "Reds"),
+        ("Recall", recall_grid, "Reds"),
+        ("F1", f1_grid, "Reds"),
+        ("DER", der_grid, "Reds_r"),
+    ]
+    extent = [min(onsets), max(onsets), min(offsets), max(offsets)]
+    for ax, (title, grid, cmap) in zip(axes.flat, plots):
+        finite = grid[np.isfinite(grid)]
+        vmin = float(np.min(finite)) if finite.size else 0.0
+        vmax = float(np.max(finite)) if finite.size else 1.0
+        if vmin == vmax:
+            vmax = vmin + 1e-9
+        image = ax.imshow(grid, origin="lower", aspect="auto", extent=extent, cmap=cmap, vmin=vmin, vmax=vmax)
+        ax.set_title(title)
+        ax.set_xlabel("onset")
+        ax.set_ylabel("offset")
+        colorbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+        colorbar.ax.yaxis.set_major_formatter(PercentFormatter(1.0))
+    fig.suptitle("Onset / Offset Sweep", fontsize=14)
+    fig.savefig(PLOT_PATH, dpi=200)
+    plt.close(fig)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sweep onset/offset for OSD.")
     parser.add_argument("--ground-truth", type=Path, required=True)
@@ -145,56 +196,9 @@ def main() -> None:
         results.append(row)
 
     print()
-
     results.sort(key=lambda row: (-float(row["f1"]), float(row["der"]), float(row["onset"]), float(row["offset"])))
-
-    with CSV_PATH.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=["index", "total", "onset", "offset", "precision", "recall", "f1", "der", "work_dir"],
-        )
-        writer.writeheader()
-        for row in results:
-            writer.writerow(row)
-
-    shape = (len(offsets), len(onsets))
-    precision_grid = np.full(shape, np.nan, dtype=float)
-    recall_grid = np.full(shape, np.nan, dtype=float)
-    f1_grid = np.full(shape, np.nan, dtype=float)
-    der_grid = np.full(shape, np.nan, dtype=float)
-    onset_index = {value: idx for idx, value in enumerate(onsets)}
-    offset_index = {value: idx for idx, value in enumerate(offsets)}
-    for row in results:
-        i = offset_index[float(row["offset"])]
-        j = onset_index[float(row["onset"])]
-        precision_grid[i, j] = float(row["precision"])
-        recall_grid[i, j] = float(row["recall"])
-        f1_grid[i, j] = float(row["f1"])
-        der_grid[i, j] = float(row["der"])
-
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10), constrained_layout=True)
-    plots = [
-        ("Precision", precision_grid, "Reds"),
-        ("Recall", recall_grid, "Reds"),
-        ("F1", f1_grid, "Reds"),
-        ("DER", der_grid, "Reds_r"),
-    ]
-    extent = [min(onsets), max(onsets), min(offsets), max(offsets)]
-    for ax, (title, grid, cmap) in zip(axes.flat, plots):
-        finite = grid[np.isfinite(grid)]
-        vmin = float(np.min(finite)) if finite.size else 0.0
-        vmax = float(np.max(finite)) if finite.size else 1.0
-        if vmin == vmax:
-            vmax = vmin + 1e-9
-        image = ax.imshow(grid, origin="lower", aspect="auto", extent=extent, cmap=cmap, vmin=vmin, vmax=vmax)
-        ax.set_title(title)
-        ax.set_xlabel("onset")
-        ax.set_ylabel("offset")
-        colorbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
-        colorbar.ax.yaxis.set_major_formatter(PercentFormatter(1.0))
-    fig.suptitle("Onset / Offset Sweep", fontsize=14)
-    fig.savefig(PLOT_PATH, dpi=200)
-    plt.close(fig)
+    write_results_csv(results)
+    plot_results(results, onsets, offsets)
 
     print()
     print("✅ Sweep completed.")
