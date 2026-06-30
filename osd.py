@@ -95,23 +95,6 @@ def smooth_mask(mask: np.ndarray, max_gap: int, min_len: int) -> np.ndarray:
         mask = updated
 
 
-def collapse_scores(scores) -> np.ndarray | None:
-    if not hasattr(scores, "data"):
-        return None
-
-    data = np.asarray(scores.data, dtype=np.float32)
-    data = np.squeeze(data)
-    if data.ndim == 1:
-        return data
-    if data.ndim != 2:
-        raise ValueError(f"Expected aggregated 1D/2D scores, got shape {data.shape}.")
-    if data.shape[1] == 1:
-        return data[:, 0]
-    if data.min() < 0.0 or data.max() > 1.0:
-        data = 1.0 / (1.0 + np.exp(-data))
-    return np.sort(data, axis=1)[:, -2]
-
-
 def scores_to_segments(
     scores,
     onset: float,
@@ -119,9 +102,10 @@ def scores_to_segments(
     min_duration_on: float,
     min_duration_off: float,
 ) -> list[dict[str, object]]:
-    data = collapse_scores(scores)
-    if data is None:
-        return []
+    data = np.asarray(scores.data, dtype=np.float32)
+    if data.ndim != 2:
+        raise ValueError(f"Expected 2D scores, got shape {data.shape}.")
+    data = np.sort(data, axis=1)[:, -2]
 
     active = np.zeros_like(data, dtype=bool)
     running = False
@@ -175,7 +159,6 @@ def detect_file(
     min_duration_on: float,
     min_duration_off: float,
     force: bool,
-    debug: bool = False,
 ) -> tuple[Path, bool]:
     output_dir.mkdir(parents=True, exist_ok=True)
     out_json = output_dir / f"{input_path.stem}_osd.json"
@@ -184,10 +167,6 @@ def detect_file(
 
     audio = load_audio(input_path, sample_rate)
     scores = detector(audio)
-    if debug and hasattr(scores, "data"):
-        data = np.asarray(scores.data, dtype=np.float32)
-        print(f"   • Score shape: {tuple(data.shape)}")
-        print(f"   • Score range: {float(np.min(data)):.4f} .. {float(np.max(data)):.4f}")
     overlaps = scores_to_segments(scores, onset, offset, min_duration_on, min_duration_off)
     overlap_duration = round(sum(item["duration"] for item in overlaps), 3)
     input_duration = round(float(audio["waveform"].shape[-1]) / sample_rate, 3)
@@ -256,7 +235,6 @@ def run_detection(
             min_duration_on=min_duration_on,
             min_duration_off=min_duration_off,
             force=force,
-            debug=index == 1,
         )
         skipped += int(did_skip)
         print(f"Progress: {100.0 * index / total:6.2f}% ({index}/{total}) | Skipped: {skipped}/{total}", end="\r", flush=True)
