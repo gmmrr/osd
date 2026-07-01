@@ -20,6 +20,7 @@ DEFAULT_MAX_EPOCHS = 1
 DEFAULT_SEED = 42 # never cahnge it for reproduction
 DEFAULT_SAVE_TOP_K = 5
 DEFAULT_EARLY_STOPPING_PATIENCE = 0
+DEFAULT_LEARNING_RATE = 1e-3
 
 SPLITS = ("train", "dev", "test")
 SPLIT_FILES = {
@@ -76,14 +77,17 @@ def run_training(
     device: str,
     save_top_k: int,
     early_stopping_patience: int,
+    learning_rate: float,
 ) -> Path:
     from pyannote.audio import Model
     from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
     import lightning.pytorch as pl
     from pyannote.audio.tasks import SpeakerDiarization
+    import torch.optim
 
     pl.seed_everything(DEFAULT_SEED, workers=True)
     model = Model.from_pretrained(str(model_dir))
+    model.configure_optimizers = lambda: torch.optim.Adam(model.parameters(), lr=learning_rate)
     task = SpeakerDiarization(
         protocol,
         duration=DEFAULT_CHUNK_DURATION,
@@ -136,6 +140,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-epochs", type=int, default=DEFAULT_MAX_EPOCHS)
     parser.add_argument("--save-top-k", type=int, default=DEFAULT_SAVE_TOP_K)
     parser.add_argument("--early-stopping-patience", type=int, default=DEFAULT_EARLY_STOPPING_PATIENCE)
+    parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     return parser.parse_args()
 
@@ -152,6 +157,7 @@ def main() -> None:
     print(f"   • Model: {args.model_dir}")
     print(f"   • Batch size: {args.batch_size}")
     print(f"   • Max epochs: {args.max_epochs}")
+    print(f"   • Learning rate: {args.learning_rate}")
     for split in SPLITS:
         print(f"   • {split}: {len(load_lst(args.ground_truth / 'lists' / SPLIT_FILES[split][0]))} record(s)")
 
@@ -164,6 +170,7 @@ def main() -> None:
         device=args.device,
         save_top_k=args.save_top_k,
         early_stopping_patience=args.early_stopping_patience,
+        learning_rate=args.learning_rate,
     )
 
     print("✅ Training completed.")
