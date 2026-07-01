@@ -7,21 +7,19 @@ import argparse
 from pathlib import Path
 
 import torch
-from pyannote.core import Annotation
-from pyannote.database.protocol.segmentation import SegmentationProtocol
+from pyannote.database.protocol.speaker_diarization import SpeakerDiarizationProtocol
 from pyannote.database.util import load_lst, load_rttm, load_uem
 
 
 REPO_ROOT = Path(__file__).resolve().parent
 
 DEFAULT_MODEL_DIR = REPO_ROOT / "models/pyannote-segmentation-3.0"
-DEFAULT_CHUNK_DURATION = 10.0
-DEFAULT_BATCH_SIZE = 16
+DEFAULT_CHUNK_DURATION = 10.0 # the value when pretrained, highly recommended not to change
+DEFAULT_BATCH_SIZE = 8
 DEFAULT_MAX_EPOCHS = 1
-DEFAULT_SEED = 42
-DEFAULT_SAVE_TOP_K = 3
+DEFAULT_SEED = 42 # never cahnge it for reproduction
+DEFAULT_SAVE_TOP_K = 5
 DEFAULT_EARLY_STOPPING_PATIENCE = 0
-OVERLAP_LABEL = "overlap"
 
 SPLITS = ("train", "dev", "test")
 SPLIT_FILES = {
@@ -31,10 +29,11 @@ SPLIT_FILES = {
 }
 
 
-def build_protocol(dataset_root: Path) -> SegmentationProtocol:
-    class LocalOverlapProtocol(SegmentationProtocol):
+def build_protocol(dataset_root: Path) -> SpeakerDiarizationProtocol:
+    class LocalDiarizationProtocol(SpeakerDiarizationProtocol):
         def __init__(self) -> None:
-            super().__init__(preprocessors={"audio": str(dataset_root / "audio" / "{uri}.wav")})
+            super().__init__()
+            self.name = "local-diarization"
             self._splits = {
                 split: {
                     "uris": load_lst(dataset_root / "lists" / lst),
@@ -56,17 +55,21 @@ def build_protocol(dataset_root: Path) -> SegmentationProtocol:
         def _iter(self, split: str):
             items = self._splits[split]
             for uri in items["uris"]:
-                annotation = Annotation(uri=uri)
-                for segment in items["annotations"][uri].get_overlap():
-                    annotation[segment] = OVERLAP_LABEL
-                yield {"uri": uri, "annotation": annotation, "annotated": items["annotated"][uri], "classes": [OVERLAP_LABEL]}
+                yield {
+                    "uri": uri,
+                    "database": "local",
+                    "scope": "file",
+                    "audio": str(dataset_root / "audio" / f"{uri}.wav"),
+                    "annotation": items["annotations"][uri],
+                    "annotated": items["annotated"][uri],
+                }
 
-    return LocalOverlapProtocol()
+    return LocalDiarizationProtocol()
 
 
 def run_training(
     output_dir: Path,
-    protocol: SegmentationProtocol,
+    protocol: SpeakerDiarizationProtocol,
     model_dir: Path,
     batch_size: int,
     max_epochs: int,
@@ -75,23 +78,29 @@ def run_training(
     early_stopping_patience: int,
 ) -> Path:
     from pyannote.audio import Model
-    from pyannote.audio.tasks import MultiLabelSegmentation
-    from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-    import pytorch_lightning as pl
+    from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+    import lightning.pytorch as pl
+    from pyannote.audio.tasks import SpeakerDiarization
 
-    model = Model.from_pretrained(str(model_dir))
     pl.seed_everything(DEFAULT_SEED, workers=True)
-    task = MultiLabelSegmentation(
+    model = Model.from_pretrained(str(model_dir))
+    task = SpeakerDiarization(
         protocol,
-        classes=[OVERLAP_LABEL],
         duration=DEFAULT_CHUNK_DURATION,
         batch_size=batch_size,
+        max_speakers_per_chunk=3,
+        max_speakers_per_frame=2,
     )
     model.task = task
 
-    accelerator = "cuda" if device == "cuda" else "cpu" if device == "cpu" else ("cuda" if torch.cuda.is_available() else "cpu")
-    if device == "cuda" and accelerator == "cpu":
-        print("⚠️  CUDA requested but not available, falling back to CPU.")
+    if device == "cuda":
+        accelerator = "cuda" if torch.cuda.is_available() else "cpu"
+        if accelerator == "cpu":
+            print("⚠️  CUDA requested but not available, falling back to CPU.")
+    elif device == "cpu":
+        accelerator = "cpu"
+    else:
+        accelerator = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
     monitor, mode = task.val_monitor
     checkpoint_kwargs = {"dirpath": str(output_dir / "checkpoints"), "save_last": True, "save_top_k": save_top_k}
