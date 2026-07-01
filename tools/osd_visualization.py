@@ -65,11 +65,10 @@ class Record:
 
 def discover_audio_paths(root: Path) -> list[Path]:
     audio_dir = root / "audio"
-    if not audio_dir.exists():
-        raise FileNotFoundError(f"Missing audio directory under: {root}")
-    paths = sorted(path.resolve() for path in audio_dir.glob("*.wav") if path.is_file())
+    search_dir = audio_dir if audio_dir.exists() else root
+    paths = sorted(path.resolve() for path in search_dir.glob("*.wav") if path.is_file())
     if not paths:
-        raise FileNotFoundError(f"No audio files found under: {audio_dir}")
+        raise FileNotFoundError(f"No audio files found under: {search_dir}")
     return paths
 
 
@@ -170,9 +169,9 @@ def load_waveform(audio_path: Path, sample_rate: int, max_points: int) -> tuple[
     return x, waveform
 
 
-def load_records(ground_truth: Path, hypothesis: Path) -> list[Record]:
+def load_records(ground_truth: Path, hypothesis: Path, show_ground_truth: bool) -> list[Record]:
     audio_paths = discover_audio_paths(ground_truth)
-    gt_segments = load_rttm_segments(ground_truth)
+    gt_segments = load_rttm_segments(ground_truth) if show_ground_truth else {}
     hyp_overlaps = load_hypothesis_overlaps(hypothesis)
 
     records: list[Record] = []
@@ -181,9 +180,9 @@ def load_records(ground_truth: Path, hypothesis: Path) -> list[Record]:
         if uri not in hyp_overlaps:
             continue
         info = sf.info(str(audio_path))
-        segments = gt_segments.get(uri, [])
-        speakers = sort_speaker_labels([segment.speaker for segment in segments])
-        gt_overlaps = compute_overlap_intervals(segments)
+        segments = gt_segments.get(uri, []) if show_ground_truth else []
+        speakers = sort_speaker_labels([segment.speaker for segment in segments]) if show_ground_truth else []
+        gt_overlaps = compute_overlap_intervals(segments) if show_ground_truth else []
         hyp_items, threshold = hyp_overlaps[uri]
         records.append(
             Record(
@@ -323,7 +322,14 @@ class TimelinePanel(QWidget):
 
 
 class OSDVisualizationWindow(QMainWindow):
-    def __init__(self, records: list[Record], waveform_sample_rate: int, waveform_points: int, audio_output_device_name: str | None) -> None:
+    def __init__(
+        self,
+        records: list[Record],
+        waveform_sample_rate: int,
+        waveform_points: int,
+        audio_output_device_name: str | None,
+        show_ground_truth: bool,
+    ) -> None:
         super().__init__()
         self.records = records
         self.waveform_sample_rate = waveform_sample_rate
@@ -332,6 +338,7 @@ class OSDVisualizationWindow(QMainWindow):
         self.audio_devices: list[QAudioDevice] = []
         self.current_record: Record | None = None
         self.panels: list[TimelinePanel] = []
+        self.show_ground_truth = show_ground_truth
 
         self.media_player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -445,18 +452,6 @@ class OSDVisualizationWindow(QMainWindow):
             return
 
         waveform_x, waveform_y = self._get_waveform(record.audio_path)
-        gt_panel = TimelinePanel(
-            title="Ground Truth",
-            subtitle=f"{record.uri} | duration={record.duration:.2f}s | speakers={len(record.speakers)}",
-            waveform_x=waveform_x,
-            waveform_y=waveform_y,
-            duration=record.duration,
-            segments=record.gt_segments,
-            overlaps=record.gt_overlaps,
-            overlap_color=GT_OVERLAP_COLOR,
-            show_speakers=True,
-            parent=self.panel_container,
-        )
         hyp_panel = TimelinePanel(
             title="OSD Prediction",
             subtitle=f"{record.uri} | threshold={record.hyp_threshold if record.hyp_threshold is not None else '?'} | overlap_segments={len(record.hyp_overlaps)}",
@@ -469,11 +464,27 @@ class OSDVisualizationWindow(QMainWindow):
             show_speakers=False,
             parent=self.panel_container,
         )
-        gt_panel.seekRequested.connect(self._seek_from_panel)
         hyp_panel.seekRequested.connect(self._seek_from_panel)
-        self.panel_layout.insertWidget(self.panel_layout.count() - 1, gt_panel)
-        self.panel_layout.insertWidget(self.panel_layout.count() - 1, hyp_panel)
-        self.panels = [gt_panel, hyp_panel]
+        if self.show_ground_truth:
+            gt_panel = TimelinePanel(
+                title="Ground Truth",
+                subtitle=f"{record.uri} | duration={record.duration:.2f}s | speakers={len(record.speakers)}",
+                waveform_x=waveform_x,
+                waveform_y=waveform_y,
+                duration=record.duration,
+                segments=record.gt_segments,
+                overlaps=record.gt_overlaps,
+                overlap_color=GT_OVERLAP_COLOR,
+                show_speakers=True,
+                parent=self.panel_container,
+            )
+            gt_panel.seekRequested.connect(self._seek_from_panel)
+            self.panel_layout.insertWidget(self.panel_layout.count() - 1, gt_panel)
+            self.panel_layout.insertWidget(self.panel_layout.count() - 1, hyp_panel)
+            self.panels = [gt_panel, hyp_panel]
+        else:
+            self.panel_layout.insertWidget(self.panel_layout.count() - 1, hyp_panel)
+            self.panels = [hyp_panel]
 
         self.media_player.setSource(QUrl.fromLocalFile(str(record.audio_path.resolve())))
         self.media_player.setPosition(0)
@@ -565,6 +576,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Visualize ground-truth and OSD predictions for the same audio.")
     parser.add_argument("--ground-truth", type=Path, required=True, help="Dataset root containing audio/ and rttm/.")
     parser.add_argument("--hypothesis", type=Path, required=True, help="OSD JSON file or directory containing *_osd.json.")
+    parser.add_argument("--no-ground-truth", action="store_true", help="Show only OSD results.")
     parser.add_argument("--waveform-sample-rate", type=int, default=DEFAULT_WAVEFORM_SAMPLE_RATE)
     parser.add_argument("--waveform-points", type=int, default=DEFAULT_WAVEFORM_POINTS)
     parser.add_argument("--audio-output-device", type=str, default=None)
@@ -573,7 +585,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_arg_parser().parse_args()
-    records = load_records(args.ground_truth, args.hypothesis)
+    records = load_records(args.ground_truth, args.hypothesis, show_ground_truth=not args.no_ground_truth)
 
     print(f"Loaded records: {len(records)}")
     print(f"Ground truth: {args.ground_truth}")
@@ -598,6 +610,7 @@ def main() -> None:
         waveform_sample_rate=args.waveform_sample_rate,
         waveform_points=args.waveform_points,
         audio_output_device_name=args.audio_output_device,
+        show_ground_truth=not args.no_ground_truth,
     )
     window.show()
 
