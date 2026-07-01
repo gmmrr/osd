@@ -150,9 +150,7 @@ def main() -> None:
     print(f"   • Progress: |{'░' * 20}|   0.00% (0/{total_files})", end="\r", flush=True)
     for index, (onset, offset) in enumerate(combos, start=1):
         combo_dir = WORK_ROOT / f"onset_{onset:.2f}_offset_{offset:.2f}".replace(".", "p")
-        if combo_dir.exists():
-            if not args.force:
-                raise FileExistsError(f"{combo_dir} already exists. Use --force to overwrite.")
+        if combo_dir.exists() and args.force:
             shutil.rmtree(combo_dir)
         combo_dir.mkdir(parents=True, exist_ok=True)
 
@@ -167,7 +165,7 @@ def main() -> None:
                 offset=offset,
                 min_duration_on=args.min_duration_on,
                 min_duration_off=args.min_duration_off,
-                force=True,
+                force=args.force,
             )
             completed_files += 1
             filled = int(round(20 * completed_files / total_files))
