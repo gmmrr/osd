@@ -96,7 +96,7 @@ def print_wide_table(scalars: dict[int, list[tuple[str, float]]]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("log_dir", type=Path, help="例如 models/segmentation-3.0-ft-train-v3/lightning_logs/version_0")
+    parser.add_argument("log_dir", type=Path, help="for example, models/segmentation-3.0-ft-train-v3/lightning_logs/version_0")
     args = parser.parse_args()
 
     event_files = sorted(args.log_dir.glob("events.out.tfevents.*"))
