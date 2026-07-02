@@ -61,12 +61,65 @@ def load_hypothesis(path: Path) -> dict[str, Timeline]:
             hypothesis[uri] = load_timeline(intervals, uri)
     return hypothesis
 
+
+def print_results_table(results: dict[str, dict[str, float]]) -> None:
+    splits = [split for split in ("train", "dev", "test") if split in results]
+    columns = [
+        "split",
+        "DER",
+        "Confusion",
+        "DetectionErrorRate",
+        "FalseAlarm",
+        "Miss",
+        "Precision",
+        "Recall",
+    ]
+    widths = {name: len(name) for name in columns}
+    for split in splits:
+        widths["split"] = max(widths["split"], len(split))
+        widths["DER"] = max(widths["DER"], 1)
+        widths["Confusion"] = max(widths["Confusion"], 1)
+        widths["DetectionErrorRate"] = max(widths["DetectionErrorRate"], len(f'{results[split]["detection_error_rate"]:.6f}'))
+        widths["FalseAlarm"] = max(widths["FalseAlarm"], len(f'{results[split]["der_false_alarm"]:.6f}'))
+        widths["Miss"] = max(widths["Miss"], len(f'{results[split]["der_miss"]:.6f}'))
+        widths["Precision"] = max(widths["Precision"], len(f'{results[split]["der_precision"]:.6f}'))
+        widths["Recall"] = max(widths["Recall"], len(f'{results[split]["der_recall"]:.6f}'))
+
+    def border(left: str, fill: str, join: str, right: str) -> str:
+        return left + join.join(fill * (widths[column] + 2) for column in columns) + right
+
+    def row(cells: list[str]) -> str:
+        return "│ " + " │ ".join(cells[i].ljust(widths[column]) for i, column in enumerate(columns)) + " │"
+
+    print(border("┌", "─", "┬", "┐"))
+    print(row(columns))
+    print(border("├", "─", "┼", "┤"))
+    for split in splits:
+        result = results[split]
+        print(
+            row(
+                [
+                    split,
+                    "-",
+                    "-",
+                    f'{result["detection_error_rate"]:.6f}',
+                    f'{result["der_false_alarm"]:.6f}',
+                    f'{result["der_miss"]:.6f}',
+                    f'{result["der_precision"]:.6f}',
+                    f'{result["der_recall"]:.6f}',
+                ]
+            )
+        )
+    print(border("└", "─", "┴", "┘"))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate overlapped speech detection.")
     parser.add_argument("--ground-truth", type=Path, required=True)
     parser.add_argument("--hypothesis", type=Path, required=True)
     parser.add_argument("--tolerance", type=float, default=0.0)
     return parser.parse_args()
+
 
 def main() -> None:
     args = parse_args()
@@ -75,6 +128,7 @@ def main() -> None:
     hypothesis = load_hypothesis(args.hypothesis)
     single_file = args.hypothesis.is_file()
 
+    results: dict[str, dict[str, float]] = {}
     for split in ("train", "dev", "test"):
         uris = splits[split]
         if not single_file:
@@ -95,10 +149,19 @@ def main() -> None:
             recall(ref, hyp, uem=uem.get(uri))
             der(ref, hyp, uem=uem.get(uri))
 
-        p = abs(precision)
-        r = abs(recall)
-        f1 = 0.0 if p + r == 0 else 2 * p * r / (p + r)
-        print(f"{split} ({len(uris)} files): Precision={100*p:.2f}% Recall={100*r:.2f}% F1={100*f1:.2f}% DER={100*abs(der):.2f}%")
+        results[split] = {
+            "der": abs(der),
+            "detection_error_rate": abs(der),
+            "der_false_alarm": der.accumulated_["false alarm"] / der.accumulated_["total"] if der.accumulated_["total"] > 0 else 0.0,
+            "der_miss": der.accumulated_["miss"] / der.accumulated_["total"] if der.accumulated_["total"] > 0 else 0.0,
+            "der_precision": abs(precision),
+            "der_recall": abs(recall),
+        }
+
+    print(f"Ground truth: {args.ground_truth}")
+    print(f"Hypothesis  : {args.hypothesis}")
+    print(f"Tolerance   : {args.tolerance}")
+    print_results_table(results)
 
 
 if __name__ == "__main__":
