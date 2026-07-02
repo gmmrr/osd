@@ -1,0 +1,24 @@
+[project]
+name = "osd"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "librosa>=0.11.0",
+    "lightning>=2.6.5",
+    "matplotlib>=3.11.0",
+    "numpy>=2.4.6",
+    "pyannote-audio>=4.0.7",
+    "pyannote-core>=6.0.1",
+    "pyannote-database>=6.1.1",
+    "pyannote-metrics>=4.1",
+    "pyloudnorm>=0.2.0",
+    "pyqtgraph>=0.14.0",
+    "pyside6>=6.11.1",
+    "scipy>=1.18.0",
+    "silero-vad>=6.2.1",
+    "soundfile>=0.14.0",
+    "tensorboardx>=2.6.5",
+    "torch>=2.12.1",
+]
