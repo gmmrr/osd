@@ -212,36 +212,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Visualize mix metadata produced by mix_metadata.py.")
     parser.add_argument("--input", type=Path, required=True, help="Path to a JSON or JSONL mix metadata file.")
     parser.add_argument("--count", type=int, default=5, help="Number of records to visualize from the input file.")
-    parser.add_argument(
-        "--show-max-speaker",
-        action="store_true",
-        help="Sort records by speaker_count descending and show the top `--count` records.",
-    )
-    parser.add_argument(
-        "--show-max-segment",
-        action="store_true",
-        help="Sort records by source_count descending and show the top `--count` records.",
-    )
-    parser.add_argument(
-        "--show-min-speaker",
-        action="store_true",
-        help="Sort records by speaker_count ascending and show the top `--count` records.",
-    )
-    parser.add_argument(
-        "--show-min-segment",
-        action="store_true",
-        help="Sort records by source_count ascending and show the top `--count` records.",
-    )
-    parser.add_argument(
-        "--show-max-duration",
-        action="store_true",
-        help="Sort records by duration descending and show the top `--count` records.",
-    )
-    parser.add_argument(
-        "--show-min-duration",
-        action="store_true",
-        help="Sort records by duration ascending and show the top `--count` records.",
-    )
+    parser.add_argument("--show-max-speaker",action="store_true",help="Sort records by speaker_count descending and show the top `--count` records.")
+    parser.add_argument("--show-max-segment",action="store_true",help="Sort records by source_count descending and show the top `--count` records.")
+    parser.add_argument("--show-min-speaker",action="store_true",help="Sort records by speaker_count ascending and show the top `--count` records.")
+    parser.add_argument("--show-min-segment",action="store_true",help="Sort records by source_count ascending and show the top `--count` records.")
+    parser.add_argument("--show-max-duration",action="store_true",help="Sort records by duration descending and show the top `--count` records.")
+    parser.add_argument("--show-min-duration",action="store_true",help="Sort records by duration ascending and show the top `--count` records.")
     parser.add_argument("--output", type=Path, default=None, help="Optional image path to save the figure.")
     return parser.parse_args()
 
