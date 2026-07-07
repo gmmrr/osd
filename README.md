@@ -54,7 +54,7 @@ If you have a newer checkpoint or model, point `--model-path` to that file inste
 
 ### Optional Tools
 
-`evaluate.py` and `tools/osd_visualization.py` are helper scripts for checking predictions and inspecting results. They are optional and not required for basic overlap detection.
+`evaluate.py`, `tools/osd_visualization.py`, and `tools/demo_visualization.py` are helper scripts for checking predictions and inspecting results. They are optional and not required for basic overlap detection.
 
 #### Evaluation
 
@@ -69,16 +69,25 @@ This evaluation currently uses a zero-tolerance time boundary, so a very low abs
 
 #### Visualization
 
+Use `tools/osd_visualization.py` to inspect OSD predictions only:
+
 ```bash
 uv run python tools/osd_visualization.py \
-  --ground-truth path/to/your/audios/root \
-  --hypothesis path/to/your/output/json \
-  --no-ground-truth
+  --audio-dir path/to/your/audios/root \
+  --osd-json path/to/your/output/json
 ```
 
-The visualization script was originally designed for training with ground truth, so `--no-ground-truth` is necessary for overlap-detection-only use cases. Note that the audio directory should contain the original, unchanged audio files rather than the overlap-dropped outputs.
+The audio directory should contain the original, unchanged audio files rather than the overlap-dropped outputs.
 
-You can also create your own ground-truth annotation in the following format:
+You can also have your own ground truth and compare both. Use `tools/demo_visualization.py` to inspect both the ground truth and the OSD predictions:
+
+```bash
+uv run python tools/demo_visualization.py \
+  --ground-truth path/to/your/ground/truth \
+  --hypothesis path/to/your/output/json
+```
+
+To create your own ground-truth annotation, you need to keep it in the following format:
 
 ```text
 path/to/your/ground/truth/ (e.g., data/mixed/example/)

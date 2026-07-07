@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QSlider,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -31,7 +32,23 @@ from PySide6.QtWidgets import (
 
 DEFAULT_WAVEFORM_SAMPLE_RATE = 16_000
 DEFAULT_WAVEFORM_POINTS = 5_000
+GT_OVERLAP_COLOR = "#f59e0b"
 HYP_OVERLAP_COLOR = "#ef4444"
+PALETTE = ["#ff0000", "#00a000", "#0057ff", "#00c7d9", "#ff00c8", "#ffd400", "#7a4cff", "#00b894"]
+
+
+@dataclass(frozen=True)
+class Segment:
+    speaker: str
+    start: float
+    end: float
+
+
+@dataclass(frozen=True)
+class Interval:
+    start: float
+    end: float
+    duration: float
 
 
 @dataclass(frozen=True)
@@ -39,7 +56,10 @@ class Record:
     uri: str
     audio_path: Path
     duration: float
-    hyp_overlaps: list[tuple[float, float, float]]
+    speakers: list[str]
+    gt_segments: list[Segment]
+    gt_overlaps: list[Interval]
+    hyp_overlaps: list[Interval]
     hyp_threshold: float | None
 
 
@@ -52,18 +72,44 @@ def discover_audio_paths(root: Path) -> list[Path]:
     return paths
 
 
-def load_hypothesis_overlaps(path: Path) -> dict[str, tuple[list[tuple[float, float, float]], float | None]]:
+def load_rttm_segments(root: Path) -> dict[str, list[Segment]]:
+    rttm_dir = root / "rttm"
+    if not rttm_dir.exists():
+        raise FileNotFoundError(f"Missing RTTM directory under: {root}")
+
+    grouped: dict[str, list[Segment]] = {}
+    for path in sorted(rttm_dir.glob("*.rttm")):
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) < 8 or parts[0] != "SPEAKER":
+                    continue
+                try:
+                    uri = parts[1]
+                    start = float(parts[3])
+                    duration = float(parts[4])
+                    speaker = parts[7]
+                except Exception:
+                    continue
+                grouped.setdefault(uri, []).append(Segment(speaker=speaker, start=start, end=start + duration))
+
+    for uri in grouped:
+        grouped[uri].sort(key=lambda s: (s.start, s.end, s.speaker))
+    return grouped
+
+
+def load_hypothesis_overlaps(path: Path) -> dict[str, tuple[list[Interval], float | None]]:
     paths = sorted(path.glob("*_osd.json")) if path.is_dir() else [path]
     if not paths:
         raise FileNotFoundError(f"No OSD JSON found under: {path}")
 
-    loaded: dict[str, tuple[list[tuple[float, float, float]], float | None]] = {}
+    loaded: dict[str, tuple[list[Interval], float | None]] = {}
     for item in paths:
         with item.open("r", encoding="utf-8") as f:
             raw = json.load(f)
         uri = str(raw.get("uri") or item.stem.removesuffix("_osd"))
         threshold = raw.get("overlap_threshold")
-        overlaps: list[tuple[float, float, float]] = []
+        overlaps: list[Interval] = []
         for segment in raw.get("overlaps", []):
             try:
                 start = float(segment["start"])
@@ -71,9 +117,37 @@ def load_hypothesis_overlaps(path: Path) -> dict[str, tuple[list[tuple[float, fl
             except Exception:
                 continue
             if end > start:
-                overlaps.append((start, end, end - start))
-        loaded[uri] = (sorted(overlaps, key=lambda x: (x[0], x[1])), float(threshold) if threshold is not None else None)
+                overlaps.append(Interval(start=start, end=end, duration=end - start))
+        loaded[uri] = (sorted(overlaps, key=lambda x: (x.start, x.end)), float(threshold) if threshold is not None else None)
     return loaded
+
+
+def compute_overlap_intervals(segments: list[Segment]) -> list[Interval]:
+    events: list[tuple[float, int, str]] = []
+    for segment in segments:
+        events.append((segment.start, 1, segment.speaker))
+        events.append((segment.end, -1, segment.speaker))
+    events.sort(key=lambda item: (item[0], item[1]))
+
+    overlaps: list[Interval] = []
+    active = 0
+    prev_time: float | None = None
+    for time, delta, _ in events:
+        if prev_time is not None and time > prev_time and active >= 2:
+            overlaps.append(Interval(start=prev_time, end=time, duration=time - prev_time))
+        active += delta
+        prev_time = time
+    return overlaps
+
+
+def sort_speaker_labels(speakers: list[str]) -> list[str]:
+    def key(label: str) -> tuple[int, str]:
+        suffix = label.rsplit("_spk", 1)
+        if len(suffix) == 2 and suffix[1].isdigit():
+            return int(suffix[1]), label
+        return 10_000, label
+
+    return sorted(dict.fromkeys(speakers), key=key)
 
 
 def load_waveform(audio_path: Path, sample_rate: int, max_points: int) -> tuple[np.ndarray, np.ndarray]:
@@ -95,9 +169,10 @@ def load_waveform(audio_path: Path, sample_rate: int, max_points: int) -> tuple[
     return x, waveform
 
 
-def load_records(audio_root: Path, osd_json: Path) -> list[Record]:
-    audio_paths = discover_audio_paths(audio_root)
-    hyp_overlaps = load_hypothesis_overlaps(osd_json)
+def load_records(ground_truth: Path, hypothesis: Path) -> list[Record]:
+    audio_paths = discover_audio_paths(ground_truth)
+    gt_segments = load_rttm_segments(ground_truth)
+    hyp_overlaps = load_hypothesis_overlaps(hypothesis)
 
     records: list[Record] = []
     for audio_path in audio_paths:
@@ -105,19 +180,25 @@ def load_records(audio_root: Path, osd_json: Path) -> list[Record]:
         if uri not in hyp_overlaps:
             continue
         info = sf.info(str(audio_path))
+        segments = gt_segments.get(uri, [])
+        speakers = sort_speaker_labels([segment.speaker for segment in segments])
+        gt_overlaps = compute_overlap_intervals(segments)
         hyp_items, threshold = hyp_overlaps[uri]
         records.append(
             Record(
                 uri=uri,
                 audio_path=audio_path,
                 duration=float(info.duration),
+                speakers=speakers,
+                gt_segments=segments,
+                gt_overlaps=gt_overlaps,
                 hyp_overlaps=hyp_items,
                 hyp_threshold=threshold,
             )
         )
 
     if not records:
-        raise RuntimeError("No shared URIs between audio files and OSD JSON.")
+        raise RuntimeError("No shared URIs between ground-truth audio and hypothesis JSON.")
     return sorted(records, key=lambda r: r.uri)
 
 
@@ -141,12 +222,21 @@ class TimelinePanel(QWidget):
         waveform_x: np.ndarray,
         waveform_y: np.ndarray,
         duration: float,
-        overlaps: list[tuple[float, float, float]],
+        segments: list[Segment],
+        overlaps: list[Interval],
         overlap_color: str,
+        show_speakers: bool,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.duration = duration
+        self.speaker_buttons: dict[str, QToolButton] = {}
+        self.speaker_ranges: dict[str, list[tuple[float, float]]] = {}
+        self.colors = {speaker: QColor(PALETTE[i % len(PALETTE)]) for i, speaker in enumerate(sort_speaker_labels([s.speaker for s in segments]))}
+
+        for segment in segments:
+            self.speaker_ranges.setdefault(segment.speaker, []).append((segment.start, segment.end))
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -176,10 +266,18 @@ class TimelinePanel(QWidget):
         self.plot.setXRange(0.0, max(0.1, duration), padding=0.01)
         self.plot.setYRange(y_min * 1.15, y_max * 1.15, padding=0.02)
 
+        if show_speakers:
+            for segment in segments:
+                color = QColor(self.colors.get(segment.speaker, QColor("#94a3b8")))
+                color.setAlphaF(0.18)
+                region = pg.LinearRegionItem(values=(segment.start, segment.end), brush=pg.mkBrush(color), movable=False)
+                region.setZValue(-10)
+                self.plot.addItem(region)
+
         color = QColor(overlap_color)
         color.setAlpha(50)
         for overlap in overlaps:
-            span = pg.LinearRegionItem(values=(overlap[0], overlap[1]), brush=pg.mkBrush(color), movable=False)
+            span = pg.LinearRegionItem(values=(overlap.start, overlap.end), brush=pg.mkBrush(color), movable=False)
             span.setZValue(-20)
             self.plot.addItem(span)
 
@@ -187,8 +285,40 @@ class TimelinePanel(QWidget):
         self.playhead.setZValue(50)
         self.plot.addItem(self.playhead)
 
+        if show_speakers and self.speaker_ranges:
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            row.addWidget(QLabel("Speakers:"))
+            for speaker in sort_speaker_labels(list(self.speaker_ranges)):
+                button = QToolButton()
+                button.setText(speaker)
+                button.setEnabled(False)
+                button.setStyleSheet(self._button_style(speaker, False))
+                self.speaker_buttons[speaker] = button
+                row.addWidget(button)
+            row.addStretch(1)
+            layout.addLayout(row)
+
+    def _button_style(self, speaker: str, active: bool) -> str:
+        color = self.colors.get(speaker, QColor("#6b7280"))
+        alpha_bg = 0.28 if active else 0.14
+        alpha_border = 0.85 if active else 0.45
+        text_color = "#111827" if active else "#374151"
+        return (
+            "QToolButton {"
+            f"background-color: rgba({color.red()}, {color.green()}, {color.blue()}, {alpha_bg});"
+            f"border: 1px solid rgba({color.red()}, {color.green()}, {color.blue()}, {alpha_border});"
+            "border-radius: 9px; padding: 5px 9px; font-weight: 700;"
+            f"color: {text_color};"
+            "}"
+        )
+
     def set_playhead(self, time_seconds: float) -> None:
         self.playhead.setPos(max(0.0, min(time_seconds, max(self.duration, 0.1))))
+        for speaker, button in self.speaker_buttons.items():
+            active = any(start <= time_seconds < end for start, end in self.speaker_ranges.get(speaker, []))
+            button.setStyleSheet(self._button_style(speaker, active))
 
 
 class OSDVisualizationWindow(QMainWindow):
@@ -217,7 +347,7 @@ class OSDVisualizationWindow(QMainWindow):
         self.media_player.durationChanged.connect(self._on_duration_changed)
         self.media_player.playbackStateChanged.connect(self._sync_play_button)
 
-        self.setWindowTitle("OSD Visualization")
+        self.setWindowTitle("Demo Visualization")
         self.resize(1400, 950)
 
         root = QWidget()
@@ -326,13 +456,29 @@ class OSDVisualizationWindow(QMainWindow):
             waveform_x=waveform_x,
             waveform_y=waveform_y,
             duration=record.duration,
+            segments=[],
             overlaps=record.hyp_overlaps,
             overlap_color=HYP_OVERLAP_COLOR,
+            show_speakers=False,
             parent=self.panel_container,
         )
         hyp_panel.seekRequested.connect(self._seek_from_panel)
+        gt_panel = TimelinePanel(
+            title="Ground Truth",
+            subtitle=f"{record.uri} | duration={record.duration:.2f}s | speakers={len(record.speakers)}",
+            waveform_x=waveform_x,
+            waveform_y=waveform_y,
+            duration=record.duration,
+            segments=record.gt_segments,
+            overlaps=record.gt_overlaps,
+            overlap_color=GT_OVERLAP_COLOR,
+            show_speakers=True,
+            parent=self.panel_container,
+        )
+        gt_panel.seekRequested.connect(self._seek_from_panel)
+        self.panel_layout.insertWidget(self.panel_layout.count() - 1, gt_panel)
         self.panel_layout.insertWidget(self.panel_layout.count() - 1, hyp_panel)
-        self.panels = [hyp_panel]
+        self.panels = [gt_panel, hyp_panel]
 
         self.media_player.setSource(QUrl.fromLocalFile(str(record.audio_path.resolve())))
         self.media_player.setPosition(0)
@@ -421,31 +567,32 @@ def format_time(seconds: float) -> str:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Visualize OSD predictions for the same audio.")
-    parser.add_argument("--audio-dir", type=Path, required=True, help="Directory containing the original audio files.")
-    parser.add_argument("--osd-json", type=Path, required=True, help="OSD JSON file or directory containing *_osd.json.")
+    parser = argparse.ArgumentParser(description="Visualize ground-truth and OSD predictions for the same audio.")
+    parser.add_argument("--ground-truth", type=Path, required=True, help="Dataset root containing audio/ and rttm/.")
+    parser.add_argument("--hypothesis", type=Path, required=True, help="OSD JSON file or directory containing *_osd.json.")
     parser.add_argument("--audio-output-device", type=str, default=None)
     return parser
 
 
 def main() -> None:
     args = build_arg_parser().parse_args()
-    records = load_records(args.audio_dir, args.osd_json)
+    records = load_records(args.ground_truth, args.hypothesis)
 
     print(f"Loaded records: {len(records)}")
-    print(f"Audio dir  : {args.audio_dir}")
-    print(f"OSD JSON   : {args.osd_json}")
+    print(f"Ground truth: {args.ground_truth}")
+    print(f"Hypothesis  : {args.hypothesis}")
 
     app = QApplication.instance() or QApplication([])
-    app.setApplicationName("OSD Visualization")
+    app.setApplicationName("Demo Visualization")
     app.setStyleSheet(
         """
         QWidget { background-color: #ffffff; color: #111827; font-family: "Inter", "Helvetica Neue", sans-serif; }
-        QComboBox, QSlider, QPushButton { font-size: 12px; }
+        QComboBox, QSlider, QPushButton, QToolButton { font-size: 12px; }
         QComboBox { background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 4px 8px; min-height: 24px; }
         QComboBox:hover { border: 1px solid #94a3b8; }
         QComboBox::drop-down { border: none; width: 24px; background: transparent; }
-        QPushButton { border-radius: 10px; }
+        QPushButton, QToolButton { border-radius: 10px; }
+        QToolButton { padding: 6px 10px; }
         """
     )
 
