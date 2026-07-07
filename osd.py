@@ -14,10 +14,7 @@ import torch
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-
-DEFAULT_INPUT_DIR = REPO_ROOT / "data/test_osdc"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "data/test_osdc/local_segmentation_3_0"
-DEFAULT_MODEL_PATH = REPO_ROOT / "models/pyannote-segmentation-3.0"
+DEFAULT_MODEL_PATH = REPO_ROOT / "models/segmentation"
 DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_ONSET = 0.52
 DEFAULT_OFFSET = 0.48
@@ -195,8 +192,8 @@ def detect_file(
 
 
 def run_detection(
-    input_dir: Path | str = DEFAULT_INPUT_DIR,
-    output_dir: Path | str = DEFAULT_OUTPUT_DIR,
+    input_dir: Path | str,
+    output_dir: Path | str,
     model_path: Path | str = DEFAULT_MODEL_PATH,
     device: str = "auto",
     onset: float = DEFAULT_ONSET,
@@ -245,8 +242,8 @@ def run_detection(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run pyannote segmentation-3.0 overlapped speech detection and output JSON.")
-    parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR, help="Input directory containing WAV files.")
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Directory where OSD JSON files will be written.")
+    parser.add_argument("--input-dir", type=Path, required=True, help="Input directory containing WAV files.")
+    parser.add_argument("--output-dir", type=Path, required=True, help="Directory where OSD JSON files will be written.")
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL_PATH, help="Local pyannote model directory.")
     parser.add_argument("--onset", type=float, default=DEFAULT_ONSET, help="Start overlap when score >= onset.")
     parser.add_argument("--offset", type=float, default=DEFAULT_OFFSET, help="End overlap when score < offset.")
