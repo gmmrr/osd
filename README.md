@@ -69,7 +69,7 @@ This evaluation currently uses a zero-tolerance time boundary, so a very low abs
 
 #### Visualization
 
-Use `tools/osd_visualization.py` to inspect OSD predictions only:
+Use `tools/osd_visualization.py` to inspect OSD predictions on the original audio:
 
 ```bash
 uv run python tools/osd_visualization.py \
@@ -77,14 +77,14 @@ uv run python tools/osd_visualization.py \
   --osd-json path/to/your/output/json
 ```
 
-The audio directory should contain the original, unchanged audio files rather than the overlap-dropped outputs.
+The audio directory should contain the original, unchanged `.wav` files. The visualization shows one panel per audio file, with the detected OSD segments and the JSON path for each result.
 
-You can also have your own ground truth and compare both. Use `tools/demo_visualization.py` to inspect both the ground truth and the OSD predictions:
+You can also compare your own ground truth against the OSD predictions. Use `tools/demo_visualization.py` to inspect both:
 
 ```bash
 uv run python tools/demo_visualization.py \
   --ground-truth path/to/your/ground/truth \
-  --hypothesis path/to/your/output/json
+  --osd-json path/to/your/output/json
 ```
 
 To create your own ground-truth annotation, you need to keep it in the following format:
