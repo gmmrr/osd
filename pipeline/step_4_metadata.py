@@ -94,10 +94,8 @@ def load_vad_json(path: Path) -> list[ActiveSegment]:
         raise ValueError(f"Unexpected sampling_rate={sr} in {path}; expected {STEP_1_AUDIO_SAMPLE_RATE}.")
 
     audio = str(item["input"])
-    audio_derivative = str(item.get("audio_derivative", Path(audio).stem))
+    audio_derivative = Path(audio).stem
     speaker_id = item.get("speaker_id")
-    if speaker_id in (None, "") and isinstance(item.get("parameters"), dict):
-        speaker_id = item["parameters"].get("speaker_id")
     speaker_id = str(speaker_id) if speaker_id not in (None, "") else None
 
     segments: list[ActiveSegment] = []

@@ -251,26 +251,21 @@ def vad_single_audio(
     segments = merge_segments(expanded)
     payload = {
         "input": str(audio_path.resolve()),
-        "audio_derivative": audio_path.stem,
         "speaker_id": speaker_id,
+        "model": VAD_MODEL_NAME,
         "sampling_rate": sr,
+        "device": "cpu",
+        "threshold": vad_threshold,
+        "pad": vad_pad,
+        "min_speech": vad_min_speech,
+        "min_silence": vad_min_silence,
+        "energy_threshold_rel": STEP_3_VAD_ENERGY_REL_THRESHOLD,
+        "smoothing_window": STEP_3_VAD_SMOOTHING_WINDOW,
+        "expand_pre": STEP_3_VAD_EXPAND_PRE,
+        "expand_post": STEP_3_VAD_EXPAND_POST,
+        "expand_delta": STEP_3_VAD_EXPAND_DELTA,
         "segment_count": len(segments),
         "segments": segments,
-        "parameters": {
-            "model": VAD_MODEL_NAME,
-            "threshold": vad_threshold,
-            "threshold_type": "speech_probability",
-            "pad": vad_pad,
-            "min_speech": vad_min_speech,
-            "min_silence": vad_min_silence,
-            "energy_threshold_rel": STEP_3_VAD_ENERGY_REL_THRESHOLD,
-            "smoothing_window": STEP_3_VAD_SMOOTHING_WINDOW,
-            "expand_pre": STEP_3_VAD_EXPAND_PRE,
-            "expand_post": STEP_3_VAD_EXPAND_POST,
-            "expand_delta": STEP_3_VAD_EXPAND_DELTA,
-            "device": "cpu",
-            "speaker_id": speaker_id,
-        },
     }
 
     with out_path.open("w", encoding="utf-8") as f:
