@@ -250,7 +250,11 @@ def vad_single_audio(
 
     segments = merge_segments(expanded)
     payload = {
-        "input": str(audio_path.resolve()),
+        "input": (
+            audio_path.resolve().relative_to(REPO_ROOT).as_posix()
+            if audio_path.resolve().is_relative_to(REPO_ROOT)
+            else audio_path.resolve().as_posix()
+        ),
         "speaker_id": speaker_id,
         "model": VAD_MODEL_NAME,
         "sampling_rate": sr,
