@@ -206,7 +206,14 @@ def weighted_choice_without_replacement(
     return chosen
 
 
-def build_source(seg: ActiveSegment, speaker: str, idx: int, start: float, end: float, gain_db: float) -> dict[str, Any]:
+def build_source(
+    seg: ActiveSegment,
+    speaker: str,
+    idx: int,
+    start: float,
+    end: float,
+    gain_db: float,
+) -> dict[str, Any]:
     """
     Convert one segment into the metadata source format.
 
@@ -428,7 +435,14 @@ def build_candidate_mixture(
 
         idx, start, end, ratio = fit
         seg = queues[key].pop(idx)
-        source = build_source(seg, labels[key], len(sources) + 1, start, end, rng.uniform(*STEP_4_GAIN_DB_RANGE))
+        source = build_source(
+            seg,
+            labels[key],
+            len(sources) + 1,
+            start,
+            end,
+            rng.uniform(*STEP_4_GAIN_DB_RANGE),
+        )
         sources.append(source)
         used.add(key)
 
@@ -465,7 +479,7 @@ def build_candidate_mixture(
         return None
 
     speaker_labels = [labels[key] for key in keys if key in used]
-    speaker_ids = sorted({src["speaker_id"] for src in sources if src["speaker_id"] not in (None, "")})
+    speaker_ids = [next((seg.speaker_id for seg in group.segments if seg.speaker_id not in (None, "")), None) for key, group in zip(keys, ordered, strict=False) if key in used]
 
     return {
         "uri": uri,
