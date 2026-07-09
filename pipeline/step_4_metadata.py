@@ -334,6 +334,7 @@ def compute_global_overlap(sources: list[dict[str, Any]], max_speakers_per_frame
 
 
 def build_candidate_mixture(
+    input_dir: Path,
     uri: str,
     groups: list[SpeakerGroup],
     rng: random.Random,
@@ -468,8 +469,9 @@ def build_candidate_mixture(
 
     return {
         "uri": uri,
-        "sample_rate": STEP_1_AUDIO_SAMPLE_RATE,
+        "input": str(input_dir),
         "duration": duration,
+        "sample_rate": STEP_1_AUDIO_SAMPLE_RATE,
         "overlap_ratio_center": overlap_center,
         "overlap_ratio_offset": overlap_offset,
         "pre_silence": round(STEP_4_PRE_SILENCE, 6),
@@ -482,6 +484,8 @@ def build_candidate_mixture(
         "speaker_labels": speaker_labels,
         "speaker_ids": speaker_ids,
         "source_count": len(sources),
+        "overlap_count": len(overlaps),
+        "global_overlap_count": len(global_overlap),
         "sources": sources,
         "overlap": overlaps,
         "global_overlap": global_overlap,
@@ -551,6 +555,7 @@ def run_metadata_dir(args: argparse.Namespace) -> None:
             raise RuntimeError(f"Only generated {len(mixtures)} mixtures after {args.max_build_trials} attempts.")
 
         record = build_candidate_mixture(
+            input_dir=args.vad_dir,
             uri=f"{args.prefix}_{len(mixtures):08d}",
             groups=groups,
             rng=rng,
