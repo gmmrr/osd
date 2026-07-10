@@ -18,6 +18,7 @@ from PySide6.QtMultimedia import QAudioDevice, QAudioOutput, QMediaDevices, QMed
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QGraphicsRectItem,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -28,7 +29,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSlider,
     QStyle,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -57,7 +57,7 @@ WAVEFORM_SAMPLE_RATE = 16_000
 WAVEFORM_POINTS_PER_SECOND = 2_000
 COMBO_MIN_WIDTH = 140
 TOP_ROW_SPACING = 16
-PANEL_SPACING = 24
+PANEL_SPACING = 14
 PLOT_PADDING = 8
 
 SPEAKER_PALETTE = [
@@ -173,7 +173,6 @@ TIME_LABEL_STYLESHEET = f"font-size: 12px; color: {COLOR_TEXT_SUBTLE}; min-width
 TOP_LABEL_STYLESHEET = f"font-size: 13px; font-weight: 700; color: {COLOR_TEXT};"
 PANEL_INFO_STYLESHEET = f"color: {COLOR_TEXT}; font-size: 12px; font-weight: 700;"
 META_NOTE_STYLESHEET = f"color: {COLOR_TEXT_MUTED}; font-size: 12px; font-weight: 400; margin-left: 12px;"
-SPEAKER_ACTIVITY_STYLESHEET = f"color: {COLOR_TEXT}; font-size: 12px; font-weight: 700;"
 
 
 def label_html(text: str) -> str:
@@ -209,8 +208,8 @@ class VisualizationPanelSpec:
     overlay_intervals: list[TimeInterval] = field(default_factory=list)
     overlay_color: str = COLOR_MONO_INTERVAL
     use_subtle_background: bool = False
-    show_speaker_buttons: bool = False
     speaker_order: list[str] = field(default_factory=list)
+    speaker_ids: list[str | None] = field(default_factory=list)
 
 
 @dataclass
@@ -480,21 +479,6 @@ def format_timestamp(seconds: float) -> str:
     return f"{minutes:02d}:{remainder:06.3f}"
 
 
-def build_speaker_button_stylesheet(color: QColor | str, active: bool) -> str:
-    qcolor = QColor(color)
-    alpha_bg = 0.28 if active else 0.14
-    alpha_border = 0.85 if active else 0.45
-    text_color = COLOR_TEXT if active else COLOR_TEXT_SUBTLE
-    return (
-        "QToolButton {"
-        f"background-color: rgba({qcolor.red()}, {qcolor.green()}, {qcolor.blue()}, {alpha_bg});"
-        f"border: 1px solid rgba({qcolor.red()}, {qcolor.green()}, {qcolor.blue()}, {alpha_border});"
-        "border-radius: 9px; padding: 5px 9px; font-weight: 400;"
-        f"color: {text_color};"
-        "}"
-    )
-
-
 class ClickablePlotWidget(pg.PlotWidget):
     seek_requested = Signal(float)
 
@@ -540,13 +524,10 @@ class VisualizationPanelWidget(QWidget):
     ) -> None:
         super().__init__(parent)
         self.duration = duration
-        self.speaker_ranges: dict[str, list[tuple[float, float]]] = {}
-        self.speaker_buttons: dict[str, QToolButton] = {}
         self.speaker_labels = panel_spec.speaker_order or sorted({item.speaker for item in panel_spec.colored_speakers})
+        self.speaker_ids = panel_spec.speaker_ids
+        self.speaker_index = {speaker: index for index, speaker in enumerate(self.speaker_labels)}
         self.speaker_colors = build_speaker_color_map(self.speaker_labels)
-
-        for interval in panel_spec.colored_speakers:
-            self.speaker_ranges.setdefault(interval.speaker, []).append((interval.start, interval.end))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -565,9 +546,11 @@ class VisualizationPanelWidget(QWidget):
             note_label = QLabel(panel_spec.note)
             note_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             note_label.setStyleSheet(META_NOTE_STYLESHEET)
-            header_layout.addWidget(note_label, 1)
-        else:
-            header_layout.addStretch(1)
+            header_layout.addWidget(note_label, 0)
+
+        header_layout.addStretch(1)
+        if self.speaker_labels:
+            header_layout.addWidget(self._build_speaker_legend(), 0, Qt.AlignmentFlag.AlignRight)
         layout.addWidget(header)
 
         plot_background = COLOR_PLOT_BG_SUBTLE if panel_spec.use_subtle_background else COLOR_PLOT_BG
@@ -596,32 +579,15 @@ class VisualizationPanelWidget(QWidget):
 
         self.plot.plot(waveform_x, waveform_y, pen=pg.mkPen(COLOR_WAVEFORM, width=1.1))
         self._set_plot_ranges(waveform_y, duration)
-        self._add_speaker_regions(panel_spec)
+        view_y_min, view_y_max = self.plot.getViewBox().viewRange()[1]
+        self._add_speaker_regions(panel_spec, view_y_min, view_y_max)
         self._add_overlay_regions(panel_spec)
 
         self.playhead = pg.InfiniteLine(pos=0.0, angle=90, movable=False, pen=pg.mkPen(COLOR_PLAYHEAD, width=2))
         self.playhead.setZValue(50)
         self.plot.addItem(self.playhead)
 
-        if panel_spec.show_speaker_buttons and self.speaker_labels:
-            buttons_row = QHBoxLayout()
-            buttons_row.setContentsMargins(0, 0, 0, 0)
-            buttons_row.setSpacing(6)
-            activity_label = QLabel("Speaker Activity")
-            activity_label.setStyleSheet(SPEAKER_ACTIVITY_STYLESHEET)
-            buttons_row.addWidget(activity_label)
-            buttons_row.addSpacing(10)
-            for speaker in self.speaker_labels:
-                button = QToolButton()
-                button.setText(speaker)
-                button.setEnabled(False)
-                button.setStyleSheet(build_speaker_button_stylesheet(self.speaker_colors[speaker], active=False))
-                self.speaker_buttons[speaker] = button
-                buttons_row.addWidget(button)
-            buttons_row.addStretch(1)
-            layout.addLayout(buttons_row)
-
-    def _set_plot_ranges(self, waveform_y: np.ndarray, duration: float) -> None:
+    def _set_plot_ranges(self, waveform_y: np.ndarray, duration: float) -> tuple[float, float]:
         y_min = float(np.min(waveform_y)) if waveform_y.size else -1.0
         y_max = float(np.max(waveform_y)) if waveform_y.size else 1.0
         if abs(y_max - y_min) < 1e-6:
@@ -630,13 +596,61 @@ class VisualizationPanelWidget(QWidget):
         self.plot.setLimits(xMin=0.0, xMax=max(0.1, duration))
         self.plot.setXRange(0.0, max(0.1, duration), padding=0.01)
         self.plot.setYRange(y_min * 1.15, y_max * 1.15, padding=0.02)
+        return y_min, y_max
 
-    def _add_speaker_regions(self, panel_spec: VisualizationPanelSpec) -> None:
+    def _add_speaker_regions(self, panel_spec: VisualizationPanelSpec, y_min: float, y_max: float) -> None:
         if not panel_spec.colored_speakers:
             return
+
+        speaker_count = max(1, len(self.speaker_labels))
+        lane_height = (y_max - y_min) / speaker_count
         for interval in panel_spec.colored_speakers:
+            speaker_index = self.speaker_index.get(interval.speaker, 0)
+            lane_bottom = y_min + speaker_index * lane_height
+            rect = QGraphicsRectItem(interval.start, lane_bottom, max(0.0, interval.end - interval.start), lane_height)
             color = QColor(self.speaker_colors[interval.speaker])
             color.setAlphaF(0.18)
+            rect.setBrush(pg.mkBrush(color))
+            rect.setPen(pg.mkPen(None))
+            rect.setZValue(-10)
+            self.plot.addItem(rect)
+
+        overlap_intervals = self._speaker_overlap_intervals(panel_spec.colored_speakers)
+        if overlap_intervals:
+            self._add_full_height_regions(overlap_intervals, panel_spec.overlay_color, z_value=-5)
+
+    def _add_overlay_regions(self, panel_spec: VisualizationPanelSpec) -> None:
+        if not panel_spec.overlay_intervals:
+            return
+        self._add_full_height_regions(panel_spec.overlay_intervals, panel_spec.overlay_color, z_value=-20)
+
+    def _speaker_overlap_intervals(self, intervals: list[SpeakerInterval]) -> list[TimeInterval]:
+        events: list[tuple[float, int]] = []
+        for interval in intervals:
+            if interval.end > interval.start:
+                events.append((interval.start, 1))
+                events.append((interval.end, -1))
+
+        events.sort(key=lambda item: (item[0], item[1]))
+        active = 0
+        overlap_start: float | None = None
+        overlaps: list[TimeInterval] = []
+
+        for time, delta in events:
+            prev_active = active
+            active += delta
+            if prev_active < 2 and active >= 2:
+                overlap_start = time
+            elif prev_active >= 2 and active < 2 and overlap_start is not None and time > overlap_start:
+                overlaps.append(TimeInterval(start=overlap_start, end=time))
+                overlap_start = None
+
+        return overlaps
+
+    def _add_full_height_regions(self, intervals: list[TimeInterval], color_value: str, *, z_value: float) -> None:
+        color = QColor(color_value)
+        color.setAlpha(80)
+        for interval in intervals:
             region = pg.LinearRegionItem(
                 values=(interval.start, interval.end),
                 brush=pg.mkBrush(color),
@@ -644,30 +658,42 @@ class VisualizationPanelWidget(QWidget):
                 hoverPen=pg.mkPen(None),
                 movable=False,
             )
-            region.setZValue(-10)
+            region.setZValue(z_value)
             self.plot.addItem(region)
 
-    def _add_overlay_regions(self, panel_spec: VisualizationPanelSpec) -> None:
-        if not panel_spec.overlay_intervals:
-            return
-        overlay_color = QColor(panel_spec.overlay_color)
-        overlay_color.setAlpha(80)
-        for interval in panel_spec.overlay_intervals:
-            region = pg.LinearRegionItem(
-                values=(interval.start, interval.end),
-                brush=pg.mkBrush(overlay_color),
-                pen=pg.mkPen(None),
-                hoverPen=pg.mkPen(None),
-                movable=False,
-            )
-            region.setZValue(-20)
-            self.plot.addItem(region)
+    def _build_speaker_legend(self) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        for label in self.speaker_labels:
+            speaker_index = self.speaker_index[label]
+            entry = QWidget()
+            entry_layout = QHBoxLayout(entry)
+            entry_layout.setContentsMargins(0, 0, 0, 0)
+            entry_layout.setSpacing(6)
+
+            dot = QLabel()
+            dot.setFixedSize(12, 12)
+            dot.setStyleSheet(f"background-color: {self.speaker_colors[label].name()}; border-radius: 6px;")
+            entry_layout.addWidget(dot)
+
+            speaker_label = QLabel(label)
+            speaker_label.setStyleSheet(f"font-size: 12px; font-weight: 400; color: {COLOR_TEXT};")
+            entry_layout.addWidget(speaker_label)
+
+            speaker_id = self.speaker_ids[speaker_index] if speaker_index < len(self.speaker_ids) else None
+            speaker_id_label = QLabel(str(speaker_id) if speaker_id not in (None, "") else "")
+            speaker_id_label.setStyleSheet(f"font-size: 12px; color: {COLOR_TEXT_MUTED}; font-weight: 400;")
+            entry_layout.addWidget(speaker_id_label)
+
+            layout.addWidget(entry)
+
+        return widget
 
     def set_playhead(self, time_seconds: float) -> None:
         self.playhead.setPos(max(0.0, min(time_seconds, max(self.duration, 0.1))))
-        for speaker, button in self.speaker_buttons.items():
-            active = any(start <= time_seconds < end for start, end in self.speaker_ranges.get(speaker, []))
-            button.setStyleSheet(build_speaker_button_stylesheet(self.speaker_colors[speaker], active))
 
 
 class VisualizationWindow(QMainWindow):

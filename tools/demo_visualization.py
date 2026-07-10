@@ -39,7 +39,6 @@ def build_records(ground_truth_root: Path, osd_json_root: Path) -> list[AudioVis
                 note=display_relative(ground_truth_root / "rttm"),
                 colored_speakers=speaker_segments,
                 use_subtle_background=True,
-                show_speaker_buttons=True,
                 speaker_order=speaker_labels,
             ),
             make_panel(

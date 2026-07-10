@@ -48,7 +48,6 @@ def build_records(dataset_root: Path) -> list[AudioVisualizationRecord]:
             note=display_relative(rttm_dir),
             colored_speakers=speaker_segments,
             use_subtle_background=True,
-            show_speaker_buttons=True,
             speaker_order=speaker_labels,
         )
         records.append(make_record(audio_path, [panel], display_relative(audio_path)))

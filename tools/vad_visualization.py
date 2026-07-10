@@ -25,9 +25,8 @@ def build_records(json_root: Path) -> list[AudioVisualizationRecord]:
 
     for json_path in sorted(path.resolve() for path in root.rglob("*_std_nml_vad.json") if path.is_file()):
         data = load_json_object(json_path)
-        parameters = data.get("parameters") if isinstance(data.get("parameters"), dict) else {}
-        model_value = data.get("model") if data.get("model") is not None else parameters.get("model")
-        threshold_value = data.get("threshold") if data.get("threshold") is not None else parameters.get("threshold")
+        model_value = data.get("model")
+        threshold_value = data.get("threshold")
         model_name = str(model_value) if model_value is not None else None
         threshold = float(threshold_value) if threshold_value is not None else None
         intervals = [
