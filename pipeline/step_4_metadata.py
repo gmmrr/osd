@@ -230,7 +230,6 @@ def build_source(
         "source": f"s{idx}",
         "source_id": seg.source_id,
         "audio": seg.audio,
-        "audio_derivative": seg.audio_derivative,
         "speaker": speaker,
         "segment_index": seg.segment_index,
         "orig_start": round(seg.orig_start, 6),
@@ -568,7 +567,7 @@ def run_metadata_dir(args: argparse.Namespace) -> None:
     write_json(mixtures, args.out, force=args.force)
 
     usage_counts = Counter(
-        name for mixture in mixtures for name in {src["audio_derivative"] for src in mixture["sources"]}
+        name for mixture in mixtures for name in {Path(src["audio"]).stem for src in mixture["sources"]}
     )
     print()
     print(f"   • Active segments: {sum(len(group.segments) for group in groups)}")
