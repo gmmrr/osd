@@ -41,6 +41,7 @@ def standardize_single_audio(
     """
     input_file = Path(input_file)
     out_path = input_file.with_name(f"{input_file.stem}_std.wav")
+
     if out_path.exists() and not force:
         if index is not None and total is not None:
             write_progress(index, total)
@@ -72,9 +73,6 @@ def run_standardize_dir(input_dir: Path | str, force: bool = False) -> None:
         force: Overwrite cached outputs when True.
     """
     input_dir = Path(input_dir)
-    if not input_dir.exists():
-        raise FileNotFoundError(f"Input directory not found: {input_dir}")
-
     input_files = sorted(
         p
         for p in input_dir.iterdir()
@@ -83,9 +81,6 @@ def run_standardize_dir(input_dir: Path | str, force: bool = False) -> None:
         and not p.stem.lower().endswith("_std")
         and not p.stem.lower().endswith("_std_nml")
     )
-    if not input_files:
-        print(f"⚠️  No raw audio files found in: {input_dir}")
-        return
 
     print(f"🚀 Standardize in '{input_dir}'")
     print(f"   • Files: {len(input_files)}")

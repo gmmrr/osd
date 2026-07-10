@@ -134,37 +134,31 @@ def infer_speaker(audio_path: Path) -> str | None:
                 continue
             seen.add(resolved)
 
-            try:
-                if resolved.suffix.lower() == ".jsonl":
-                    with resolved.open("r", encoding="utf-8") as f:
-                        for line in f:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                row = json.loads(line)
-                            except Exception:
-                                continue
-                            if isinstance(row, dict) and (
-                                _match_wav_reference(audio_path, row.get("wav_path"))
-                                or _match_wav_reference(audio_path, row.get("input"))
-                            ):
-                                speaker = row.get("speaker")
-                                if speaker not in (None, ""):
-                                    inferred = str(speaker)
-                                    break
-                else:
-                    with resolved.open("r", encoding="utf-8", newline="") as f:
-                        for row in csv.DictReader(f):
-                            if _match_wav_reference(audio_path, row.get("wav_path")) or _match_wav_reference(
-                                audio_path, row.get("input")
-                            ):
-                                speaker = row.get("speaker")
-                                if speaker not in (None, ""):
-                                    inferred = str(speaker)
-                                    break
-            except Exception:
-                continue
+            if resolved.suffix.lower() == ".jsonl":
+                with resolved.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        row = json.loads(line)
+                        if isinstance(row, dict) and (
+                            _match_wav_reference(audio_path, row.get("wav_path"))
+                            or _match_wav_reference(audio_path, row.get("input"))
+                        ):
+                            speaker = row.get("speaker")
+                            if speaker not in (None, ""):
+                                inferred = str(speaker)
+                                break
+            else:
+                with resolved.open("r", encoding="utf-8", newline="") as f:
+                    for row in csv.DictReader(f):
+                        if _match_wav_reference(audio_path, row.get("wav_path")) or _match_wav_reference(
+                            audio_path, row.get("input")
+                        ):
+                            speaker = row.get("speaker")
+                            if speaker not in (None, ""):
+                                inferred = str(speaker)
+                                break
 
         if inferred is not None:
             break
@@ -335,6 +329,7 @@ def vad_single_audio(
     target_dir = Path(out_dir) if out_dir is not None else audio_path.parent
     target_dir.mkdir(parents=True, exist_ok=True)
     out_path = target_dir / f"{audio_path.stem}_vad{suffix}.json"
+
     if out_path.exists() and not force:
         if index is not None and total is not None:
             write_progress(index, total)
@@ -441,13 +436,7 @@ def run_vad_dir(
         out_dir: Optional output directory. Defaults to the input directory.
     """
     input_dir = Path(input_dir)
-    if not input_dir.exists():
-        raise FileNotFoundError(f"Input directory not found: {input_dir}")
-
     input_files = discover_input_files(input_dir)
-    if not input_files:
-        print(f"⚠️  No .wav files found in: {input_dir}")
-        return
 
     print(f"🚀 VAD in '{input_dir}'")
     print(f"   • Files: {len(input_files)}")

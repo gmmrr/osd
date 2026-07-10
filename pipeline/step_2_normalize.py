@@ -80,10 +80,8 @@ def normalize_single_audio(
         Path to the normalized WAV file.
     """
     input_file = Path(input_file)
-    if not input_file.name.endswith("_std.wav"):
-        raise ValueError(f"Normalize expects *_std.wav input, got: {input_file.name}")
-
     out_path = input_file.with_name(f"{input_file.stem}_nml.wav")
+
     if out_path.exists() and not force:
         if index is not None and total is not None:
             write_progress(index, total)
@@ -122,17 +120,11 @@ def run_normalize_dir(
         force: Overwrite cached outputs when True.
     """
     input_dir = Path(input_dir)
-    if not input_dir.exists():
-        raise FileNotFoundError(f"Input directory not found: {input_dir}")
-
     input_files = [
         path
         for path in sorted(input_dir.iterdir())
         if path.is_file() and path.suffix.lower() == ".wav" and path.name.endswith("_std.wav")
     ]
-    if not input_files:
-        print(f"⚠️  No standardized files found in: {input_dir}")
-        return
 
     print(f"🚀 Normalize in '{input_dir}'")
     print(f"   • Files: {len(input_files)}")

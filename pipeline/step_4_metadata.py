@@ -101,11 +101,8 @@ def load_vad_json(path: Path) -> list[ActiveSegment]:
 
     segments: list[ActiveSegment] = []
     for i, seg in enumerate(item.get("segments", [])):
-        try:
-            start = float(seg["start"])
-            end = float(seg["end"])
-        except Exception:
-            continue
+        start = float(seg["start"])
+        end = float(seg["end"])
         if end > start:
             segments.append(
                 ActiveSegment(
@@ -518,33 +515,12 @@ def write_json(items: list[dict[str, Any]], path: Path, force: bool = False) -> 
         path: Output JSON path.
         force: Overwrite existing file when True.
     """
-    if path.exists() and not force:
-        raise FileExistsError(f"{path} already exists. Use --force to overwrite.")
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not force:
+        raise FileExistsError(f"Refusing to overwrite existing file: {path}")
     with path.open("w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
         f.write("\n")
-
-
-def validate_args(args: argparse.Namespace) -> None:
-    """
-    Validate metadata generation arguments.
-
-    Args:
-        args: Parsed CLI arguments.
-    """
-    if args.min_mixture_duration <= 0:
-        raise ValueError("--min-mixture-duration must be positive.")
-    if args.max_mixture_duration < args.min_mixture_duration:
-        raise ValueError("--max-mixture-duration must be >= --min-mixture-duration.")
-    if args.min_segment_duration < 0:
-        raise ValueError("--min-segment-duration must be non-negative.")
-    if args.overlap_random_offset < 0:
-        raise ValueError("--overlap-random-offset must be non-negative.")
-    if args.max_speakers < 2:
-        raise ValueError("--max-speakers must be at least 2.")
-    if args.max_speakers_per_frame < 1:
-        raise ValueError("--max-speakers-per-frame must be at least 1.")
 
 
 def run_metadata_dir(args: argparse.Namespace) -> None:
@@ -625,7 +601,6 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    validate_args(args)
     run_metadata_dir(args)
 
 

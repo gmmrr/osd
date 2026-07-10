@@ -40,14 +40,7 @@ def load_mix_records(path: Path) -> list[dict[str, Any]]:
     if path.name != "mix.json":
         raise ValueError(f"mix expects mix.json input, got: {path.name}")
     with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    if not isinstance(data, list):
-        raise ValueError(f"Expected a JSON array in {path}, got {type(data).__name__}.")
-    records = [item for item in data if isinstance(item, dict)]
-    if len(records) != len(data):
-        raise ValueError(f"{path} must contain only JSON objects.")
-    return records
+        return json.load(f)
 
 
 def load_source_audio(path: Path, sample_rate: int) -> np.ndarray:
@@ -111,8 +104,6 @@ def render_mix(
     out_frames = int(round(duration * sample_rate))
 
     sources = record.get("sources") or []
-    if not sources:
-        raise ValueError(f"Record {record.get('uri', '?')} has no sources.")
 
     mix = np.zeros((1, out_frames), dtype=np.float32)
     for source in sources:
@@ -208,9 +199,9 @@ def write_text(path: Path, content: str, force: bool) -> None:
         content: File content.
         force: Overwrite existing file when True.
     """
-    if path.exists() and not force:
-        raise FileExistsError(f"{path} already exists. Use --force to overwrite.")
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not force:
+        raise FileExistsError(f"Refusing to overwrite existing file: {path}")
     path.write_text(content, encoding="utf-8")
 
 
@@ -252,17 +243,14 @@ def write_split_files(dataset_root: Path, records: list[dict[str, Any]], force: 
             list_lines.append(uri)
             uem_lines.append(format_uem_line(uri, duration))
             for source in record.get("sources", []):
-                try:
-                    rttm_lines.append(
-                        format_rttm_line(
-                            uri=uri,
-                            speaker=str(source["speaker"]),
-                            start=float(source["mix_start"]),
-                            end=float(source["mix_end"]),
-                        )
+                rttm_lines.append(
+                    format_rttm_line(
+                        uri=uri,
+                        speaker=str(source["speaker"]),
+                        start=float(source["mix_start"]),
+                        end=float(source["mix_end"]),
                     )
-                except Exception:
-                    continue
+                )
 
         write_text(rttm_dir / f"{split}.rttm", "\n".join(rttm_lines) + ("\n" if rttm_lines else ""), force)
         write_text(uem_dir / f"{split}.uem", "\n".join(uem_lines) + ("\n" if uem_lines else ""), force)
