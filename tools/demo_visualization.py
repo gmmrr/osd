@@ -16,7 +16,7 @@ from utils.visualization import (
     load_rttm_segments,
     sort_records,
     run_visualization,
-    sort_speaker_labels,
+    sort_speakers,
 )
 
 
@@ -32,14 +32,14 @@ def build_records(ground_truth_root: Path, osd_json_root: Path) -> list[AudioVis
             continue
 
         speaker_segments = segments_by_uri.get(uri, [])
-        speaker_labels = sort_speaker_labels(segment.speaker for segment in speaker_segments)
+        speakers = sort_speakers(segment.speaker for segment in speaker_segments)
         panels = [
             make_panel(
-                tags=["Ground Truth", f"speakers={len(speaker_labels)}"],
+                tags=["Ground Truth", f"speakers={len(speakers)}"],
                 note=display_relative(ground_truth_root / "rttm"),
                 colored_speakers=speaker_segments,
                 use_subtle_background=True,
-                speaker_order=speaker_labels,
+                speakers=speakers,
             ),
             make_panel(
                 tags=[

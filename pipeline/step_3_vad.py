@@ -111,15 +111,15 @@ def _match_wav_reference(audio_path: Path, raw_value: Any) -> bool:
     )
 
 
-def infer_speaker_id(audio_path: Path) -> str | None:
+def infer_speaker(audio_path: Path) -> str | None:
     """
-    Infer speaker_id from nearby metadata files.
+    Infer speaker from nearby metadata files.
 
     Args:
         audio_path: Audio file used as the lookup key.
 
     Returns:
-        The inferred speaker_id, or None when no match is found.
+        The inferred speaker, or None when no match is found.
     """
     inferred: str | None = None
     seen: set[Path] = set()
@@ -149,7 +149,7 @@ def infer_speaker_id(audio_path: Path) -> str | None:
                                 _match_wav_reference(audio_path, row.get("wav_path"))
                                 or _match_wav_reference(audio_path, row.get("input"))
                             ):
-                                speaker = row.get("speaker_id")
+                                speaker = row.get("speaker")
                                 if speaker not in (None, ""):
                                     inferred = str(speaker)
                                     break
@@ -159,7 +159,7 @@ def infer_speaker_id(audio_path: Path) -> str | None:
                             if _match_wav_reference(audio_path, row.get("wav_path")) or _match_wav_reference(
                                 audio_path, row.get("input")
                             ):
-                                speaker = row.get("speaker_id")
+                                speaker = row.get("speaker")
                                 if speaker not in (None, ""):
                                     inferred = str(speaker)
                                     break
@@ -360,7 +360,7 @@ def vad_single_audio(
     mean_e = float(np.mean(smooth)) if smooth.size else 0.0
     energy_threshold = STEP_3_VAD_ENERGY_REL_THRESHOLD * mean_e
     n_samples = len(wav_cpu)
-    speaker_id = infer_speaker_id(audio_path)
+    speaker = infer_speaker(audio_path)
 
     step_delta = max(1, int(STEP_3_VAD_EXPAND_DELTA * sr / 1000.0))
     expanded = []
@@ -390,7 +390,7 @@ def vad_single_audio(
             if audio_path.resolve().is_relative_to(REPO_ROOT)
             else audio_path.resolve().as_posix()
         ),
-        "speaker_id": speaker_id,
+        "speaker": speaker,
         "model": VAD_MODEL_NAME,
         "sampling_rate": sr,
         "device": "cpu",

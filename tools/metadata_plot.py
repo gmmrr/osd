@@ -50,12 +50,12 @@ def pick_record(records: list[dict[str, Any]], index: int) -> dict[str, Any]:
     return records[index]
 
 
-def speaker_colors(speaker_labels: list[str]) -> dict[str, str]:
+def speaker_colors(speakers: list[str]) -> dict[str, str]:
     palette = plt.get_cmap("tab10")
-    return {speaker: palette(i % 10) for i, speaker in enumerate(speaker_labels)}
+    return {speaker: palette(i % 10) for i, speaker in enumerate(speakers)}
 
 
-def sort_speaker_labels(speaker_labels: list[str]) -> list[str]:
+def sort_speakers(speakers: list[str]) -> list[str]:
     def sort_key(label: str) -> tuple[int, str]:
         suffix = label.rsplit("spk", 1)[-1]
         try:
@@ -63,7 +63,7 @@ def sort_speaker_labels(speaker_labels: list[str]) -> list[str]:
         except ValueError:
             return 10**9, label
 
-    return sorted(speaker_labels, key=sort_key)
+    return sorted(speakers, key=sort_key)
 
 
 def sort_records(records: list[dict[str, Any]], key_name: str, reverse: bool) -> list[dict[str, Any]]:
@@ -106,22 +106,16 @@ def draw_mix(ax: plt.Axes, record: dict[str, Any]) -> None:
     if not sources:
         raise ValueError("Record has no sources.")
 
-    speaker_labels = record.get("speaker_labels") or []
-    if not speaker_labels:
-        speaker_labels = list(dict.fromkeys(src.get("speaker", "unknown") for src in sources))
-
-    speaker_labels = sort_speaker_labels(speaker_labels[:3])
-    colors = speaker_colors(speaker_labels)
-    speaker_rows = {speaker: idx for idx, speaker in enumerate(speaker_labels)}
-    if not speaker_rows:
-        raise ValueError("Record has no speaker labels.")
+    speakers = sort_speakers(record["speakers"][:3])
+    colors = speaker_colors(speakers)
+    speaker_rows = {speaker: idx for idx, speaker in enumerate(speakers)}
 
     total_sources = len(sources)
 
     for src in sources:
         start = float(src["mix_start"])
         end = float(src["mix_end"])
-        speaker = src.get("speaker", "unknown")
+        speaker = str(src["speaker"])
         if speaker not in speaker_rows:
             continue
         idx = speaker_rows[speaker]
@@ -158,25 +152,25 @@ def draw_mix(ax: plt.Axes, record: dict[str, Any]) -> None:
 
     duration = float(record.get("duration", max(float(src["mix_end"]) for src in sources)))
     ax.set_xlim(0, 25.0)
-    ax.set_ylim(-0.6, len(speaker_labels) - 0.4)
-    ax.set_yticks(range(len(speaker_labels)))
+    ax.set_ylim(-0.6, len(speakers) - 0.4)
+    ax.set_yticks(range(len(speakers)))
     ax.set_yticklabels([])
     ax.tick_params(axis="y", length=0)
     ax.set_title(
         f'{record.get("uri", "mix")} | duration={record.get("duration", duration):.2f}s | segments={total_sources} | '
         f'speakers={record["speaker_count"]} | '
-        f'max speaker per frame={record.get("max_speakers_per_frame", record.get("max_overlap_speaker", "?"))} | '
+        f'max speaker per frame={record["max_speakers_per_frame"]} | '
         f'{format_overlap_summary(record)}'
     )
     ax.grid(axis="x", alpha=0.25)
 
-    legend_items = [Patch(facecolor=colors[speaker], edgecolor="black", label=speaker) for speaker in speaker_labels]
+    legend_items = [Patch(facecolor=colors[speaker], edgecolor="black", label=speaker) for speaker in speakers]
     if legend_items:
         ax.legend(handles=legend_items, loc="upper right", frameon=True, fontsize=9)
 
 def plot_mix(record: dict[str, Any], output: Path | None = None, show: bool = True) -> Path | None:
-    speaker_labels = record.get("speaker_labels") or []
-    fig, ax = plt.subplots(figsize=(16, max(3.5, 0.9 * max(1, min(3, len(speaker_labels))) + 2)))
+    speakers = record["speakers"]
+    fig, ax = plt.subplots(figsize=(16, max(3.5, 0.9 * max(1, min(3, len(speakers))) + 2)))
     draw_mix(ax, record)
     fig.tight_layout()
 

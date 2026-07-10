@@ -208,8 +208,7 @@ class VisualizationPanelSpec:
     overlay_intervals: list[TimeInterval] = field(default_factory=list)
     overlay_color: str = COLOR_MONO_INTERVAL
     use_subtle_background: bool = False
-    speaker_order: list[str] = field(default_factory=list)
-    speaker_ids: list[str | None] = field(default_factory=list)
+    speakers: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -297,14 +296,14 @@ def load_waveform(audio_path: Path) -> tuple[np.ndarray, np.ndarray]:
     return x_axis, waveform
 
 
-def sort_speaker_labels(labels: Iterable[str]) -> list[str]:
+def sort_speakers(speakers: Iterable[str]) -> list[str]:
     def sort_key(label: str) -> tuple[int, str]:
         prefix, sep, suffix = label.rpartition("_spk")
         if sep and suffix.isdigit():
             return int(suffix), label
         return 10_000, label
 
-    return sorted(dict.fromkeys(labels), key=sort_key)
+    return sorted(dict.fromkeys(speakers), key=sort_key)
 
 
 def format_optional_float_tag(name: str, value: float | None, precision: int = 2) -> str:
@@ -368,8 +367,8 @@ def speaker_palette_color(index: int) -> QColor:
     return QColor(SPEAKER_PALETTE[index % len(SPEAKER_PALETTE)])
 
 
-def build_speaker_color_map(labels: list[str]) -> dict[str, QColor]:
-    return {label: speaker_palette_color(index) for index, label in enumerate(labels)}
+def build_speaker_color_map(speakers: list[str]) -> dict[str, QColor]:
+    return {speaker: speaker_palette_color(index) for index, speaker in enumerate(speakers)}
 
 
 def populate_audio_output_combo(combo: QComboBox, audio_output: QAudioOutput) -> list[QAudioDevice]:
@@ -524,10 +523,9 @@ class VisualizationPanelWidget(QWidget):
     ) -> None:
         super().__init__(parent)
         self.duration = duration
-        self.speaker_labels = panel_spec.speaker_order or sorted({item.speaker for item in panel_spec.colored_speakers})
-        self.speaker_ids = panel_spec.speaker_ids
-        self.speaker_index = {speaker: index for index, speaker in enumerate(self.speaker_labels)}
-        self.speaker_colors = build_speaker_color_map(self.speaker_labels)
+        self.speakers = panel_spec.speakers
+        self.speaker_index = {speaker: index for index, speaker in enumerate(self.speakers)}
+        self.speaker_colors = build_speaker_color_map(self.speakers)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -549,7 +547,7 @@ class VisualizationPanelWidget(QWidget):
             header_layout.addWidget(note_label, 0)
 
         header_layout.addStretch(1)
-        if self.speaker_labels:
+        if self.speakers:
             header_layout.addWidget(self._build_speaker_legend(), 0, Qt.AlignmentFlag.AlignRight)
         layout.addWidget(header)
 
@@ -602,7 +600,7 @@ class VisualizationPanelWidget(QWidget):
         if not panel_spec.colored_speakers:
             return
 
-        speaker_count = max(1, len(self.speaker_labels))
+        speaker_count = max(1, len(self.speakers))
         lane_height = (y_max - y_min) / speaker_count
         for interval in panel_spec.colored_speakers:
             speaker_index = self.speaker_index.get(interval.speaker, 0)
@@ -667,8 +665,8 @@ class VisualizationPanelWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        for label in self.speaker_labels:
-            speaker_index = self.speaker_index[label]
+        for speaker in self.speakers:
+            speaker_index = self.speaker_index[speaker]
             entry = QWidget()
             entry_layout = QHBoxLayout(entry)
             entry_layout.setContentsMargins(0, 0, 0, 0)
@@ -676,17 +674,12 @@ class VisualizationPanelWidget(QWidget):
 
             dot = QLabel()
             dot.setFixedSize(12, 12)
-            dot.setStyleSheet(f"background-color: {self.speaker_colors[label].name()}; border-radius: 6px;")
+            dot.setStyleSheet(f"background-color: {self.speaker_colors[speaker].name()}; border-radius: 6px;")
             entry_layout.addWidget(dot)
 
-            speaker_label = QLabel(label)
-            speaker_label.setStyleSheet(f"font-size: 12px; font-weight: 400; color: {COLOR_TEXT};")
+            speaker_label = QLabel(speaker)
+            speaker_label.setStyleSheet(f"font-size: 12px; color: {COLOR_TEXT_MUTED}; font-weight: 400;")
             entry_layout.addWidget(speaker_label)
-
-            speaker_id = self.speaker_ids[speaker_index] if speaker_index < len(self.speaker_ids) else None
-            speaker_id_label = QLabel(str(speaker_id) if speaker_id not in (None, "") else "")
-            speaker_id_label.setStyleSheet(f"font-size: 12px; color: {COLOR_TEXT_MUTED}; font-weight: 400;")
-            entry_layout.addWidget(speaker_id_label)
 
             layout.addWidget(entry)
 

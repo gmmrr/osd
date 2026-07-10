@@ -14,7 +14,7 @@ from utils.visualization import (
     make_record,
     sort_records,
     run_visualization,
-    sort_speaker_labels,
+    sort_speakers,
 )
 
 
@@ -25,7 +25,7 @@ def build_records(dataset_root: Path) -> list[AudioVisualizationRecord]:
 
     for audio_path in find_wav_paths(dataset_root, prefer_audio_dir=True):
         speaker_segments = segments_by_uri.get(audio_path.stem, [])
-        speaker_labels = sort_speaker_labels(segment.speaker for segment in speaker_segments)
+        speakers = sort_speakers(segment.speaker for segment in speaker_segments)
         events: list[tuple[float, int]] = []
         for segment in speaker_segments:
             events.append((segment.start, 1))
@@ -42,13 +42,13 @@ def build_records(dataset_root: Path) -> list[AudioVisualizationRecord]:
             tags=[
                 "Mix",
                 f"segments={len(speaker_segments)}",
-                f"speakers={len(speaker_labels)}",
+                f"speakers={len(speakers)}",
                 f"max speaker per frame={max_concurrent_speakers}",
             ],
             note=display_relative(rttm_dir),
             colored_speakers=speaker_segments,
             use_subtle_background=True,
-            speaker_order=speaker_labels,
+            speakers=speakers,
         )
         records.append(make_record(audio_path, [panel], display_relative(audio_path)))
 

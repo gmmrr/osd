@@ -8,6 +8,7 @@ import argparse
 import json
 import random
 import sys
+import uuid
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,7 +43,7 @@ class ActiveSegment:
     source_id: str
     audio: str
     audio_derivative: str
-    speaker_id: str | None
+    speaker: str | None
     segment_index: int
     orig_start: float
     orig_end: float
@@ -95,8 +96,8 @@ def load_vad_json(path: Path) -> list[ActiveSegment]:
 
     audio = str(item["input"])
     audio_derivative = Path(audio).stem
-    speaker_id = item.get("speaker_id")
-    speaker_id = str(speaker_id) if speaker_id not in (None, "") else None
+    speaker = item["speaker"]
+    speaker = str(speaker) if speaker not in (None, "") else None
 
     segments: list[ActiveSegment] = []
     for i, seg in enumerate(item.get("segments", [])):
@@ -111,7 +112,7 @@ def load_vad_json(path: Path) -> list[ActiveSegment]:
                     source_id=f"{audio_derivative}_seg{i:04d}",
                     audio=audio,
                     audio_derivative=audio_derivative,
-                    speaker_id=speaker_id,
+                    speaker=speaker,
                     segment_index=i,
                     orig_start=start,
                     orig_end=end,
@@ -219,7 +220,7 @@ def build_source(
 
     Args:
         seg: Active segment to serialize.
-        speaker: Local speaker label for the mixture.
+        speaker: Speaker identifier for the mixture.
         idx: 1-based source index.
         start: Mix start time in seconds.
         end: Mix end time in seconds.
@@ -233,9 +234,8 @@ def build_source(
         "source_id": seg.source_id,
         "audio": seg.audio,
         "audio_derivative": seg.audio_derivative,
-        "speaker_id": seg.speaker_id,
-        "segment_index": seg.segment_index,
         "speaker": speaker,
+        "segment_index": seg.segment_index,
         "orig_start": round(seg.orig_start, 6),
         "orig_end": round(seg.orig_end, 6),
         "orig_duration": round(seg.duration, 6),
@@ -345,6 +345,7 @@ def build_candidate_mixture(
     uri: str,
     groups: list[SpeakerGroup],
     rng: random.Random,
+    run_uuid: str,
     overlap_center: float = STEP_4_OVERLAP_RATIO,
     overlap_offset: float = STEP_4_OVERLAP_RANDOM_OFFSET,
     min_mixture_duration: float = STEP_4_MIN_MIXTURE_DURATION,
@@ -396,7 +397,12 @@ def build_candidate_mixture(
     keys = [group.key for group in ordered]
     speaker_keys = list(keys)
     rng.shuffle(speaker_keys)
-    labels = {key: f"{uri}_spk{i + 1}" for i, key in enumerate(speaker_keys)}
+    fallback_ids = {key: f"{uri}_spk{i + 1}_{run_uuid}" for i, key in enumerate(speaker_keys)}
+
+    resolved_speakers: dict[str, str] = {}
+    for key, group in zip(keys, ordered, strict=False):
+        speaker = next((seg.speaker for seg in group.segments if seg.speaker not in (None, "")), None)
+        resolved_speakers[key] = str(speaker) if speaker not in (None, "") else fallback_ids[key]
 
     sources: list[dict[str, Any]] = []
     overlaps: list[dict[str, Any]] = []
@@ -437,7 +443,7 @@ def build_candidate_mixture(
         seg = queues[key].pop(idx)
         source = build_source(
             seg,
-            labels[key],
+            resolved_speakers[key],
             len(sources) + 1,
             start,
             end,
@@ -478,11 +484,11 @@ def build_candidate_mixture(
     if not ok:
         return None
 
-    speaker_labels = [labels[key] for key in keys if key in used]
-    speaker_ids = [next((seg.speaker_id for seg in group.segments if seg.speaker_id not in (None, "")), None) for key, group in zip(keys, ordered, strict=False) if key in used]
+    speakers = list(dict.fromkeys(resolved_speakers[key] for key in keys if key in used))
 
     return {
         "uri": uri,
+        "uuid": run_uuid,
         "input": str(input_dir),
         "duration": duration,
         "sample_rate": STEP_1_AUDIO_SAMPLE_RATE,
@@ -492,11 +498,8 @@ def build_candidate_mixture(
         "post_silence": round(STEP_4_POST_SILENCE, 6),
         "max_speakers": STEP_4_MAX_SPEAKERS,
         "max_speakers_per_frame": STEP_4_MAX_SPEAKERS_PER_FRAME,
-        "max_number_speaker": STEP_4_MAX_SPEAKERS,
-        "max_overlap_speaker": STEP_4_MAX_SPEAKERS_PER_FRAME,
-        "speaker_count": len(speaker_labels),
-        "speaker_labels": speaker_labels,
-        "speaker_ids": speaker_ids,
+        "speakers": speakers,
+        "speaker_count": len(speakers),
         "source_count": len(sources),
         "overlap_count": len(overlaps),
         "global_overlap_count": len(global_overlap),
@@ -556,6 +559,7 @@ def run_metadata_dir(args: argparse.Namespace) -> None:
         raise RuntimeError("Need at least two speaker groups.")
 
     rng = random.Random(args.seed)
+    run_uuid = uuid.uuid4().hex[:8]
     mixtures: list[dict[str, Any]] = []
     attempts = 0
 
@@ -573,6 +577,7 @@ def run_metadata_dir(args: argparse.Namespace) -> None:
             uri=f"{args.prefix}_{len(mixtures):08d}",
             groups=groups,
             rng=rng,
+            run_uuid=run_uuid,
             overlap_center=args.overlap_ratio,
             overlap_offset=args.overlap_random_offset,
             min_mixture_duration=args.min_mixture_duration,
