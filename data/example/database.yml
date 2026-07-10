@@ -1,0 +1,16 @@
+dataset:
+  root: .
+  audio: audio/{uri}.wav
+  splits:
+    train:
+      list: lists/train.lst
+      rttm: rttm/train.rttm
+      uem: uem/train.uem
+    dev:
+      list: lists/dev.lst
+      rttm: rttm/dev.rttm
+      uem: uem/dev.uem
+    test:
+      list: lists/test.lst
+      rttm: rttm/test.rttm
+      uem: uem/test.uem
