@@ -15,10 +15,10 @@ from pyannote.core import Annotation
 from pyannote.metrics.detection import DetectionErrorRate, DetectionPrecision, DetectionRecall
 from matplotlib.ticker import PercentFormatter
 
-from evaluate import load_ground_truth, load_hypothesis, rttm_overlap
-from osd import DEFAULT_MODEL_PATH, DEFAULT_SAMPLE_RATE, detect_file, discover_input_files, load_model, resolve_device
+from osd.evaluate import load_ground_truth, load_hypothesis, rttm_overlap
+from osd.osd import DEFAULT_MODEL_PATH, DEFAULT_SAMPLE_RATE, detect_file, discover_input_files, load_model, resolve_device
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parents[1]
 WORK_ROOT = REPO_ROOT / "onset_offset"
 CSV_PATH = WORK_ROOT / "results.csv"
 PLOT_PATH = WORK_ROOT / "heatmaps.png"

@@ -8,7 +8,7 @@ This project focuses on NVVs-specific overlap speech detection trained on the Nv
 
 ## 2. OSD
 
-The main entry point is `run_osd_drop.py`. It reads `.wav` files from a directory, runs a local model, and produces a `*_osd.wav` file for each input file. The corresponding `*_osd.json` files record the time periods that contain overlap.
+The main entry point is `osd/run_osd_drop.py`. It reads `.wav` files from a directory, runs a local model, and produces a `*_osd.wav` file for each input file. The corresponding `*_osd.json` files record the time periods that contain overlap.
 
 ### Environment
 
@@ -27,7 +27,7 @@ If the dependencies change later, run `uv add ...` and then `uv sync` again.
 Run overlap speech detection with the following command:
 
 ```bash
-uv run python run_osd_drop.py \
+uv run python osd/run_osd_drop.py \
   --input-dir path/to/your/audios/root \
   --output-dir path/to/your/output/dir \
   --model-path models/segmentation-3.0-ft-train-v5/checkpoints/last.ckpt \
@@ -54,15 +54,16 @@ If you have a newer checkpoint or model, point `--model-path` to that file inste
 
 ### Optional Tools
 
-`evaluate.py`, `tools/osd_visualization.py`, and `tools/demo_visualization.py` are helper scripts for checking predictions and inspecting results. They are optional and not required for basic overlap detection.
+`osd/evaluate.py`, `tools/osd_visualization.py`, and `tools/demo_visualization.py` are helper scripts for checking predictions and inspecting results. They are optional and not required for basic overlap detection.
 
 #### Evaluation
 
 ```bash
-uv run python evaluate.py \
+uv run python osd/evaluate.py \
   --ground-truth path/to/your/ground/truth \
   --hypothesis path/to/your/output/json \
-  --tolerance 0.0
+  --output-csv path/to/your/output/evaluate.csv \
+  --force
 ```
 
 This evaluation currently uses a zero-tolerance time boundary, so a very low absolute score is normal. When comparing runs, focus on the relative difference between them.
