@@ -13,7 +13,7 @@ from pyannote.database.util import load_lst, load_rttm, load_uem
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-DEFAULT_MODEL_DIR = REPO_ROOT / "models/pyannote-segmentation-3.0"
+DEFAULT_MODEL_DIR = REPO_ROOT / "osd" / "models" / "pyannote-segmentation-3.0"
 DEFAULT_CHUNK_DURATION = 10.0 # the value when pretrained, highly recommended not to change
 DEFAULT_BATCH_SIZE = 8
 DEFAULT_MAX_EPOCHS = 1

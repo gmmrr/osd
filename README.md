@@ -30,7 +30,7 @@ Run overlap speech detection with the following command:
 uv run python osd/run_osd_drop.py \
   --input-dir path/to/your/audios/root \
   --output-dir path/to/your/output/dir \
-  --model-path models/segmentation-3.0-ft-train-v5/checkpoints/last.ckpt \
+  --model-path osd/models/segmentation-3.0-ft-train-v5/checkpoints/last.ckpt \
   --onset 0.52 \
   --offset 0.48 \
   --overlap-pad 50 \
@@ -39,7 +39,7 @@ uv run python osd/run_osd_drop.py \
 
 - `--input-dir`: directory containing `.wav` files
 - `--output-dir`: directory where `*_osd.wav` files are written
-- `--model-path`: local model or checkpoint path
+- `--model-path`: local model or checkpoint path under `osd/models/`
 - `--onset` / `--offset`: overlap decision thresholds. The defaults are `0.52` and `0.48`, respectively.
 - `--overlap-pad`: extend each detected overlap segment by this many milliseconds on both sides before dropping audio
 - `--force`: overwrite existing outputs
@@ -47,7 +47,7 @@ uv run python osd/run_osd_drop.py \
 The latest checkpoint used by this project is:
 
 ```bash
-models/segmentation-3.0-ft-train-v5/checkpoints/last.ckpt
+osd/models/segmentation-3.0-ft-train-v5/checkpoints/last.ckpt
 ```
 
 If you have a newer checkpoint or model, point `--model-path` to that file instead.

@@ -14,7 +14,7 @@ import torch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MODEL_PATH = REPO_ROOT / "models/segmentation"
+DEFAULT_MODEL_PATH = REPO_ROOT / "osd" / "models" / "pyannote-segmentation-3.0"
 DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_ONSET = 0.52
 DEFAULT_OFFSET = 0.48
