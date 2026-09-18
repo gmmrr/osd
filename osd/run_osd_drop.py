@@ -188,11 +188,6 @@ def run_detection(
 
     detector = load_model(model_path, resolve_device(device))
 
-    print(f"🚀 OSD drop in '{input_dir}'")
-    print(f"   • Files: {len(input_files)}")
-    print(f"   • Sample rate: {DEFAULT_SAMPLE_RATE}")
-    print(f"   • Model: {model_path}")
-
     skipped = 0
     total = len(input_files)
     for index, file_path in enumerate(input_files, start=1):
@@ -213,7 +208,6 @@ def run_detection(
         print(f"Progress: {100.0 * index / total:6.2f}% ({index}/{total}) | Skipped: {skipped}/{total}", end="\r", flush=True)
 
     print()
-    print("✅ OSD drop completed.")
 
 
 def parse_args() -> argparse.Namespace:
@@ -233,6 +227,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    input_files = discover_input_files(args.input_dir)
+    if input_files:
+        print(f"🚀 OSD drop in '{args.input_dir}'")
+        print(f"   • Files: {len(input_files)}")
+        print(f"   • Sample rate: {DEFAULT_SAMPLE_RATE}")
+        print(f"   • Model: {args.model_path}")
+
     run_detection(
         input_dir=args.input_dir,
         output_dir=args.output_dir,
@@ -245,6 +246,8 @@ def main() -> None:
         overlap_pad_ms=args.overlap_pad,
         force=args.force,
     )
+    if input_files:
+        print("✅ OSD drop completed.")
     print(f"Saved: {args.output_dir}")
 
 
