@@ -602,6 +602,10 @@ def main() -> None:
     if output_csv.exists() and not args.force:
         raise FileExistsError(f"{output_csv} already exists. Use --force to overwrite it.")
 
+    print("🚀 OSD evaluation")
+    print(f"   • Ground truth: {args.ground_truth}")
+    print(f"   • Hypothesis: {args.hypothesis}")
+
     rttm_by_uri, uem_by_uri, splits = load_ground_truth(args.ground_truth)
     hypothesis_by_uri = load_hypothesis(args.hypothesis)
     settings = {
@@ -702,10 +706,10 @@ def main() -> None:
         writer.writeheader()
         writer.writerows(rows)
 
-    print(f"Ground truth: {args.ground_truth}")
-    print(f"Hypothesis  : {args.hypothesis}")
-    print(f"CSV output  : {output_csv}")
     render_summary_table(rows)
+    print()
+    print("✅ OSD evaluation completed.")
+    print(f"Saved: {output_csv}")
 
 
 if __name__ == "__main__":
