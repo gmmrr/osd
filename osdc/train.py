@@ -43,7 +43,7 @@ def run_training(
     if max_epochs <= 0:
         raise ValueError("max-epochs must be positive")
     seed_everything(DEFAULT_SEED, workers=True, verbose=False)
-    model_path = model_dir if model_dir.is_file() else model_dir / "pytorch_model.bin"
+    model_path = model_dir if model_dir.is_file() else model_dir / "checkpoints" / "last.ckpt"
     model = Model.from_checkpoint(
         model_path,
         learning_rate=learning_rate,
