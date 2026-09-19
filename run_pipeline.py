@@ -36,6 +36,7 @@ from config.params import (
 from pipeline.step_1_standardize import run_standardize_dir
 from pipeline.step_2_normalize import run_normalize_dir
 from pipeline.step_3_vad import run_vad_dir
+from pipeline.alternatives.step_4_metadata_multiple import run_metadata_dir as run_metadata_multiple_dir
 from pipeline.step_4_metadata import run_metadata_dir
 from pipeline.step_5_mix import run_mix_dir
 
@@ -129,6 +130,7 @@ def build_step4_args(
         max_build_trials=max_build_trials,
         max_speakers=args.max_speakers,
         max_speakers_per_frame=args.max_speakers_per_frame,
+        max_speakers_per_frame_ratio=args.max_speakers_per_frame_ratio,
         force=force,
     )
 
@@ -148,9 +150,12 @@ def run_pipeline(args: argparse.Namespace) -> None:
     work_dir = args.work_dir
     mix_json = work_dir / "mix.json"
     output_dir = args.output_dir
+    metadata_runner = run_metadata_multiple_dir if args.max_speakers_per_frame > 2 else run_metadata_dir
 
     if args.n_mixtures <= 0:
         raise ValueError("--n-mixtures must be positive.")
+    if args.max_speakers_per_frame < 2:
+        raise ValueError("--max-speakers-per-frame must be at least 2.")
     if work_dir.resolve() == output_dir.resolve():
         raise ValueError("--work-dir must be different from --output-dir.")
 
@@ -191,7 +196,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
     if args.force:
         if mix_json.exists():
             mix_json.unlink()
-        run_metadata_dir(
+        metadata_runner(
             build_step4_args(
                 vad_dir=work_dir,
                 out=mix_json,
@@ -208,7 +213,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             )
     elif resume_enabled:
         temp_mix_json = output_dir / "_mix_resume.json"
-        run_metadata_dir(
+        metadata_runner(
             build_step4_args(
                 vad_dir=work_dir,
                 out=temp_mix_json,
@@ -228,7 +233,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
     else:
         if mix_json.exists():
             mix_json.unlink()
-        run_metadata_dir(
+        metadata_runner(
             build_step4_args(
                 vad_dir=work_dir,
                 out=mix_json,
@@ -277,6 +282,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-build-trials", type=int, default=STEP_4_MAX_BUILD_TRIALS, help="Step 4 maximum sampling attempts.")
     parser.add_argument("--max-speakers", type=int, default=STEP_4_MAX_SPEAKERS, help="Step 4 maximum speakers per mixture.")
     parser.add_argument("--max-speakers-per-frame", type=int, default=STEP_4_MAX_SPEAKERS_PER_FRAME, help="Step 4 maximum overlapping speakers per frame.")
+    parser.add_argument("--max-speakers-per-frame-ratio", nargs="+", help="Alternative Step 4 duration ratios for counts 0 through max-speakers-per-frame, or natural.")
 
     args = parser.parse_args()
     if args.work_dir is None:

@@ -492,7 +492,7 @@ def build_candidate_mixture(
         "overlap_ratio_offset": overlap_offset,
         "pre_silence": round(STEP_4_PRE_SILENCE, 6),
         "post_silence": round(STEP_4_POST_SILENCE, 6),
-        "max_speakers": STEP_4_MAX_SPEAKERS,
+        "max_speakers": max_speakers,
         "max_speakers_per_frame": STEP_4_MAX_SPEAKERS_PER_FRAME,
         "speakers": speakers,
         "speaker_count": len(speakers),
@@ -581,7 +581,7 @@ def run_metadata_dir(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate VAD-based mixture metadata.")
-    parser.add_argument("--input-dir", type=Path, required=True, help="Path to _std_nml_vad.json files produced by step_3_vad.py.")
+    parser.add_argument("--input-dir", dest="vad_dir", type=Path, required=True, help="Path to _std_nml_vad.json files produced by step_3_vad.py.")
     parser.add_argument("--out", type=Path, required=True, help="Output JSON path.")
     parser.add_argument("--n-mixtures", type=int, required=True, help="Number of mixtures to generate.")
     parser.add_argument("--overlap-ratio", type=float, default=STEP_4_OVERLAP_RATIO, help="Center overlap ratio.")
@@ -593,7 +593,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prefix", type=str, default="mix", help="Mixture URI prefix.")
     parser.add_argument("--max-build-trials", type=int, default=STEP_4_MAX_BUILD_TRIALS, help="Maximum sampling attempts.")
     parser.add_argument("--max-speakers", dest="max_speakers", type=int, default=STEP_4_MAX_SPEAKERS, help="Maximum speakers per mixture.")
-    parser.add_argument("--max-speakers-per-frame", dest="max_speakers_per_frame", type=int, default=STEP_4_MAX_SPEAKERS_PER_FRAME, help="Maximum overlapping speakers per frame.")
+    parser.add_argument("--max-speakers-per-frame", dest="max_speakers_per_frame", type=int, default=STEP_4_MAX_SPEAKERS_PER_FRAME, help="Maximum overlapping speakers per frame.") # actually can only be 2
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs.")
     return parser.parse_args()
 
