@@ -140,7 +140,7 @@ def _chunk_regions(start: float, end: float, stride: float) -> Iterable[float]:
         position += stride
 
 
-class OSDCChunkDataset(Dataset[dict[str, Tensor | str | float]]):
+class OSDCChunkDataset(Dataset[dict[str, Tensor | str]]):
     """RTTM/UEM-backed chunks with frame-level speaker-count targets."""
 
     def __init__(
@@ -205,7 +205,7 @@ class OSDCChunkDataset(Dataset[dict[str, Tensor | str | float]]):
                 counts += torch.bincount(target[valid], minlength=NUM_CLASSES)
         return counts
 
-    def __getitem__(self, index: int) -> dict[str, Tensor | str | float]:
+    def __getitem__(self, index: int) -> dict[str, Tensor | str]:
         chunk = self.chunks[index]
         info = sf.info(str(chunk.audio_path))
         start_frame = max(0, round(chunk.start * info.samplerate))
@@ -220,7 +220,7 @@ class OSDCChunkDataset(Dataset[dict[str, Tensor | str | float]]):
         samples = F.pad(samples, (0, max(0, self.num_samples - samples.numel())))
         return {
             "waveform": samples.unsqueeze(0), "target": self.target_for_chunk(chunk), "valid": self.valid_for_chunk(chunk),
-            "uri": chunk.uri, "start": chunk.start,
+            "uri": chunk.uri,
         }
 
 
