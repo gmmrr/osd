@@ -193,6 +193,13 @@ class SpeakerInterval:
 
 
 @dataclass(frozen=True)
+class SpeakerCountInterval:
+    start: float
+    end: float
+    count: int
+
+
+@dataclass(frozen=True)
 class OSDAnnotation:
     json_path: Path
     intervals: list[TimeInterval]
@@ -209,6 +216,8 @@ class VisualizationPanelSpec:
     overlay_color: str = COLOR_MONO_INTERVAL
     use_subtle_background: bool = False
     speakers: list[str] = field(default_factory=list)
+    speaker_count_intervals: list[SpeakerCountInterval] = field(default_factory=list)
+    max_speaker_count: int = 0
 
 
 @dataclass
@@ -526,6 +535,9 @@ class VisualizationPanelWidget(QWidget):
         self.speakers = panel_spec.speakers
         self.speaker_index = {speaker: index for index, speaker in enumerate(self.speakers)}
         self.speaker_colors = build_speaker_color_map(self.speakers)
+        self.show_speaker_count_strip = bool(
+            panel_spec.speaker_count_intervals and panel_spec.max_speaker_count > 2
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -554,8 +566,8 @@ class VisualizationPanelWidget(QWidget):
         plot_background = COLOR_PLOT_BG_SUBTLE if panel_spec.use_subtle_background else COLOR_PLOT_BG
         self.plot = ClickablePlotWidget()
         self.plot.setBackground(plot_background)
-        self.plot.setMinimumHeight(220)
-        self.plot.setMaximumHeight(260)
+        self.plot.setMinimumHeight(240 if self.show_speaker_count_strip else 220)
+        self.plot.setMaximumHeight(280 if self.show_speaker_count_strip else 260)
         self.plot.setMenuEnabled(False)
         self.plot.hideButtons()
         self.plot.setContentsMargins(PLOT_PADDING, PLOT_PADDING, PLOT_PADDING, PLOT_PADDING)
@@ -580,6 +592,7 @@ class VisualizationPanelWidget(QWidget):
         view_y_min, view_y_max = self.plot.getViewBox().viewRange()[1]
         self._add_speaker_regions(panel_spec, view_y_min, view_y_max)
         self._add_overlay_regions(panel_spec)
+        self._add_speaker_count_strip(panel_spec)
 
         self.playhead = pg.InfiniteLine(pos=0.0, angle=90, movable=False, pen=pg.mkPen(COLOR_PLAYHEAD, width=2))
         self.playhead.setZValue(50)
@@ -621,6 +634,36 @@ class VisualizationPanelWidget(QWidget):
         if not panel_spec.overlay_intervals:
             return
         self._add_full_height_regions(panel_spec.overlay_intervals, panel_spec.overlay_color, z_value=-20)
+
+    def _add_speaker_count_strip(
+        self,
+        panel_spec: VisualizationPanelSpec,
+    ) -> None:
+        if not self.show_speaker_count_strip:
+            return
+
+        self.speaker_count_strip = pg.ViewBox(enableMenu=False)
+        self.speaker_count_strip.setMouseEnabled(x=False, y=False)
+        self.speaker_count_strip.setYRange(0.0, 1.0, padding=0.0)
+        self.speaker_count_strip.setLimits(yMin=0.0, yMax=1.0)
+        self.speaker_count_strip.setXLink(self.plot.getViewBox())
+        self.plot.plotItem.layout.addItem(self.speaker_count_strip, 4, 1)
+        self.plot.plotItem.layout.setRowFixedHeight(4, 14)
+        self.plot.plotItem.layout.setRowSpacing(3, 6)
+
+        max_count = panel_spec.max_speaker_count
+        for interval in panel_spec.speaker_count_intervals:
+            gray = round(255 * (max_count - interval.count) / max_count)
+            color = QColor(gray, gray, gray)
+            rect = QGraphicsRectItem(
+                interval.start,
+                0.0,
+                max(0.0, interval.end - interval.start),
+                1.0,
+            )
+            rect.setBrush(pg.mkBrush(color))
+            rect.setPen(pg.mkPen(None))
+            self.speaker_count_strip.addItem(rect)
 
     def _speaker_overlap_intervals(self, intervals: list[SpeakerInterval]) -> list[TimeInterval]:
         events: list[tuple[float, int]] = []
