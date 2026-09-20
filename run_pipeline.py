@@ -23,6 +23,12 @@ from config.params import (
     STEP_3_VAD_MIN_SPEECH,
     STEP_3_VAD_MIN_SILENCE,
     STEP_3_VAD_PAD,
+    STEP_4_ALT_FRAME_RESOLUTION,
+    STEP_4_ALT_MAX_EVENT_DURATION,
+    STEP_4_ALT_MAX_SESSION_DURATION,
+    STEP_4_ALT_MIN_DURATION_RATIO_THRESHOLD,
+    STEP_4_ALT_MIN_EVENT_DURATION,
+    STEP_4_ALT_MIN_OVERLAP_ORDER_DURATION,
     STEP_4_MAX_BUILD_TRIALS,
     STEP_4_MAX_MIXTURE_DURATION,
     STEP_4_MAX_SPEAKERS,
@@ -36,8 +42,8 @@ from config.params import (
 from pipeline.step_1_standardize import run_standardize_dir
 from pipeline.step_2_normalize import run_normalize_dir
 from pipeline.step_3_vad import run_vad_dir
-from pipeline.alternatives.step_4_metadata_multiple import run_metadata_dir as run_metadata_multiple_dir
 from pipeline.step_4_metadata import run_metadata_dir
+from pipeline.alternatives.step_4_metadata_multiple import run_metadata_dir as run_metadata_multiple_dir
 from pipeline.step_5_mix import run_mix_dir
 
 
@@ -131,6 +137,12 @@ def build_step4_args(
         max_speakers=args.max_speakers,
         max_speakers_per_frame=args.max_speakers_per_frame,
         max_speakers_per_frame_ratio=args.max_speakers_per_frame_ratio,
+        frame_resolution=args.frame_resolution,
+        min_event_duration=args.min_event_duration,
+        max_event_duration=args.max_event_duration,
+        min_overlap_order_duration=args.min_overlap_order_duration,
+        min_duration_ratio_threshold=args.min_duration_ratio_threshold,
+        max_session_duration=args.max_session_duration,
         force=force,
     )
 
@@ -150,7 +162,13 @@ def run_pipeline(args: argparse.Namespace) -> None:
     work_dir = args.work_dir
     mix_json = work_dir / "mix.json"
     output_dir = args.output_dir
-    metadata_runner = run_metadata_multiple_dir if args.max_speakers_per_frame > 2 else run_metadata_dir
+    use_multiple_metadata = (
+        args.max_speakers_per_frame > 2
+        or args.max_speakers_per_frame_ratio is not None
+        or args.min_duration_ratio_threshold != STEP_4_ALT_MIN_DURATION_RATIO_THRESHOLD
+        or args.max_session_duration != STEP_4_ALT_MAX_SESSION_DURATION
+    )
+    metadata_runner = run_metadata_multiple_dir if use_multiple_metadata else run_metadata_dir
 
     if args.n_mixtures <= 0:
         raise ValueError("--n-mixtures must be positive.")
@@ -282,7 +300,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-build-trials", type=int, default=STEP_4_MAX_BUILD_TRIALS, help="Step 4 maximum sampling attempts.")
     parser.add_argument("--max-speakers", type=int, default=STEP_4_MAX_SPEAKERS, help="Step 4 maximum speakers per mixture.")
     parser.add_argument("--max-speakers-per-frame", type=int, default=STEP_4_MAX_SPEAKERS_PER_FRAME, help="Step 4 maximum overlapping speakers per frame.")
-    parser.add_argument("--max-speakers-per-frame-ratio", nargs="+", help="Alternative Step 4 duration ratios for counts 0 through max-speakers-per-frame, or natural.")
+    parser.add_argument("--max-speakers-per-frame-ratio", nargs="+", help="Alternative Step 4 duration ratios for counts 1 through max-speakers-per-frame, or natural.")
+    parser.add_argument("--frame-resolution", type=float, default=STEP_4_ALT_FRAME_RESOLUTION, help="Alternative Step 4 frame resolution in seconds.")
+    parser.add_argument("--min-event-duration", type=float, default=STEP_4_ALT_MIN_EVENT_DURATION, help="Alternative Step 4 minimum event duration in seconds.")
+    parser.add_argument("--max-event-duration", type=float, default=STEP_4_ALT_MAX_EVENT_DURATION, help="Alternative Step 4 maximum event duration in seconds.")
+    parser.add_argument("--min-overlap-order-duration", type=float, default=STEP_4_ALT_MIN_OVERLAP_ORDER_DURATION, help="Alternative Step 4 minimum cumulative duration for each non-zero active overlap order.")
+    parser.add_argument("--min-duration-ratio-threshold", type=float, default=STEP_4_ALT_MIN_DURATION_RATIO_THRESHOLD, help="Alternative Step 4 minimum ratio that controls mixture-level duration coverage.")
+    parser.add_argument("--max-session-duration", type=float, default=STEP_4_ALT_MAX_SESSION_DURATION, help="Alternative Step 4 hard maximum session duration in seconds.")
 
     args = parser.parse_args()
     if args.work_dir is None:
