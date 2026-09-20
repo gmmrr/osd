@@ -128,7 +128,7 @@ def run_training(
         default_root_dir=str(output_dir),
         callbacks=callbacks,
         log_every_n_steps=1,
-        deterministic=True,
+        deterministic="warn",
         gradient_clip_val=5.0,
     )
     trainer.fit(model, train_loader, dev_loader)

@@ -101,7 +101,7 @@ def run_training(
 
     trainer = Trainer(
         accelerator=selected_accelerator, devices=1, max_epochs=max_epochs,
-        default_root_dir=str(output_dir), callbacks=callbacks, log_every_n_steps=1, deterministic=True,
+        default_root_dir=str(output_dir), callbacks=callbacks, log_every_n_steps=1, deterministic="warn",
         gradient_clip_val=5.0,
     )
     trainer.fit(model, train_loader, dev_loader)
