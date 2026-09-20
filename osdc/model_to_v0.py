@@ -21,6 +21,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from osdc.model import NUM_CLASSES, Model, save_native_checkpoint
 
 DEFAULT_SEED = 42
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "osdc" / "models" / "segmentation-3.0-based-v0"
 
 
 @dataclass(frozen=True)
@@ -103,7 +104,7 @@ def print_report(report: TransferReport) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=f"Convert segmentation-3.0 into a native {NUM_CLASSES}-class OSDC v0 checkpoint.")
     parser.add_argument("--model-dir", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     return parser.parse_args()
 
 
