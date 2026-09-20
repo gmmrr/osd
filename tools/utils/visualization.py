@@ -4,6 +4,7 @@ import json
 import math
 import os
 import sys
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -218,6 +219,7 @@ class VisualizationPanelSpec:
     speakers: list[str] = field(default_factory=list)
     speaker_count_intervals: list[SpeakerCountInterval] = field(default_factory=list)
     max_speaker_count: int = 0
+    always_show_speaker_count_strip: bool = False
 
 
 @dataclass
@@ -315,12 +317,56 @@ def sort_speakers(speakers: Iterable[str]) -> list[str]:
     return sorted(dict.fromkeys(speakers), key=sort_key)
 
 
+def build_speaker_count_intervals(
+    speaker_segments: list[SpeakerInterval],
+    duration: float,
+) -> tuple[list[SpeakerCountInterval], int]:
+    events: list[tuple[float, int, str]] = []
+    for segment in speaker_segments:
+        start = max(0.0, segment.start)
+        end = min(duration, segment.end)
+        if end > start:
+            events.append((start, 1, segment.speaker))
+            events.append((end, -1, segment.speaker))
+    events.sort(key=lambda item: item[0])
+
+    active: Counter[str] = Counter()
+    intervals: list[SpeakerCountInterval] = []
+    cursor = 0.0
+    event_index = 0
+
+    while event_index < len(events):
+        event_time = events[event_index][0]
+        if event_time > cursor:
+            intervals.append(SpeakerCountInterval(cursor, event_time, len(active)))
+        while event_index < len(events) and events[event_index][0] == event_time:
+            _, delta, speaker = events[event_index]
+            active[speaker] += delta
+            if active[speaker] <= 0:
+                del active[speaker]
+            event_index += 1
+        cursor = event_time
+
+    if cursor < duration:
+        intervals.append(SpeakerCountInterval(cursor, duration, len(active)))
+
+    merged: list[SpeakerCountInterval] = []
+    for interval in intervals:
+        if merged and merged[-1].count == interval.count:
+            previous = merged[-1]
+            merged[-1] = SpeakerCountInterval(previous.start, interval.end, interval.count)
+        else:
+            merged.append(interval)
+
+    return merged, max((interval.count for interval in merged), default=0)
+
+
 def format_optional_float_tag(name: str, value: float | None, precision: int = 2) -> str:
     return f"{name}={value:.{precision}f}" if value is not None else f"{name}=?"
 
 
-def load_rttm_segments(dataset_root: Path) -> dict[str, list[SpeakerInterval]]:
-    rttm_dir = require_directory(dataset_root / "rttm")
+def load_rttm_directory(rttm_dir: Path) -> dict[str, list[SpeakerInterval]]:
+    rttm_dir = require_directory(rttm_dir)
     segments_by_uri: dict[str, list[SpeakerInterval]] = {}
 
     for rttm_path in sorted(rttm_dir.glob("*.rttm")):
@@ -343,6 +389,10 @@ def load_rttm_segments(dataset_root: Path) -> dict[str, list[SpeakerInterval]]:
     for uri in segments_by_uri:
         segments_by_uri[uri].sort(key=lambda item: (item.start, item.end, item.speaker))
     return segments_by_uri
+
+
+def load_rttm_segments(dataset_root: Path) -> dict[str, list[SpeakerInterval]]:
+    return load_rttm_directory(dataset_root / "rttm")
 
 
 def load_osd_annotations(path: Path) -> dict[str, OSDAnnotation]:
@@ -536,7 +586,9 @@ class VisualizationPanelWidget(QWidget):
         self.speaker_index = {speaker: index for index, speaker in enumerate(self.speakers)}
         self.speaker_colors = build_speaker_color_map(self.speakers)
         self.show_speaker_count_strip = bool(
-            panel_spec.speaker_count_intervals and panel_spec.max_speaker_count > 2
+            panel_spec.speaker_count_intervals
+            and panel_spec.max_speaker_count > 0
+            and (panel_spec.always_show_speaker_count_strip or panel_spec.max_speaker_count > 2)
         )
 
         layout = QVBoxLayout(self)
