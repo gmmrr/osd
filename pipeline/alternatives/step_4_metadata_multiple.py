@@ -812,10 +812,34 @@ def run_metadata_dir(args: argparse.Namespace) -> None:
     groups = merge_speaker_groups(collect_groups(args.vad_dir, args.min_segment_duration))
     max_count = args.max_speakers_per_frame
     active_ratios = resolve_generation_ratios(args)
+    frame_ratio_map = {
+        order: active_ratios[order - 1]
+        for order in range(1, max_count + 1)
+    }
+    configured_min_duration = args.min_mixture_duration
+    configured_max_duration = args.max_mixture_duration
+    _, effective_min_duration, effective_max_duration = calculate_session_duration_range(
+        frame_ratio_map,
+        configured_min_duration,
+        configured_max_duration,
+        args.min_overlap_order_duration,
+        args.min_duration_ratio_threshold,
+        args.max_session_duration,
+        args.frame_resolution,
+    )
     rng = random.Random(args.seed)
     mixtures: list[dict[str, Any]] = []
 
+    print(f"🚀 Generate frame-balanced metadata in '{args.vad_dir}'")
     print(f"   • Speaker groups: {len(groups)}")
+    print(f"   • Target mixtures: {args.n_mixtures}")
+    print(f"   • Frame ratios: {', '.join(f'{count}: {ratio:.2%}' for count, ratio in frame_ratio_map.items())}")
+    print(f"   • Minimum overlap-order coverage: {args.min_overlap_order_duration:g} ms")
+    print(f"   • Duration ratio threshold: {args.min_duration_ratio_threshold:.2%}")
+    print(f"   • Maximum session duration: {args.max_session_duration:g} ms")
+    print(f"   • Same-speaker gap: {STEP_4_SAME_SPEAKER_GAP} ms")
+    print(f"   • Configured duration: {configured_min_duration:g}–{configured_max_duration:g} ms")
+    print(f"   • Effective duration: {effective_min_duration:g}–{effective_max_duration:g} ms")
 
     for index in range(args.n_mixtures):
         mixtures.append(
@@ -846,6 +870,8 @@ def run_metadata_dir(args: argparse.Namespace) -> None:
             f"     {order} speakers: {values['frames']} frames, "
             f"{values['duration']:.2f} s, {values['ratio']:.2%}"
         )
+    print(f"   • Output: {args.out}")
+    print("✅ Frame-balanced metadata completed.")
 
 
 def parse_args() -> argparse.Namespace:
@@ -872,36 +898,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    args = parse_args()
-    active_ratios = resolve_generation_ratios(args)
-    frame_ratio_map = {
-        order: active_ratios[order - 1]
-        for order in range(1, args.max_speakers_per_frame + 1)
-    }
-    configured_min_duration = args.min_mixture_duration
-    configured_max_duration = args.max_mixture_duration
-    _, effective_min_duration, effective_max_duration = calculate_session_duration_range(
-        frame_ratio_map,
-        configured_min_duration,
-        configured_max_duration,
-        args.min_overlap_order_duration,
-        args.min_duration_ratio_threshold,
-        args.max_session_duration,
-        args.frame_resolution,
-    )
-
-    print(f"🚀 Generate frame-balanced metadata in '{args.vad_dir}'")
-    print(f"   • Target mixtures: {args.n_mixtures}")
-    print(f"   • Frame ratios: {', '.join(f'{count}: {ratio:.2%}' for count, ratio in frame_ratio_map.items())}")
-    print(f"   • Minimum overlap-order coverage: {args.min_overlap_order_duration:g} ms")
-    print(f"   • Duration ratio threshold: {args.min_duration_ratio_threshold:.2%}")
-    print(f"   • Maximum session duration: {args.max_session_duration:g} ms")
-    print(f"   • Same-speaker gap: {STEP_4_SAME_SPEAKER_GAP} ms")
-    print(f"   • Configured duration: {configured_min_duration:g}–{configured_max_duration:g} ms")
-    print(f"   • Effective duration: {effective_min_duration:g}–{effective_max_duration:g} ms")
-    run_metadata_dir(args)
-    print(f"   • Output: {args.out}")
-    print("✅ Frame-balanced metadata completed.")
+    run_metadata_dir(parse_args())
 
 
 if __name__ == "__main__":
