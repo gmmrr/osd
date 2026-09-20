@@ -1,0 +1,17 @@
+learning_rate: 0.0001
+model_config:
+  linear:
+    hidden_size: 128
+    num_layers: 2
+  lstm:
+    bidirectional: true
+    dropout: 0.5
+    hidden_size: 128
+    monolithic: true
+    num_layers: 4
+  num_channels: 1
+  num_classes: 5
+  sample_rate: 16000
+  sincnet:
+    stride: 10
+weight_decay: 0.0001
