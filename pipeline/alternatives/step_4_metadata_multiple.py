@@ -834,12 +834,6 @@ def run_metadata_dir(args: argparse.Namespace) -> None:
     print(f"   • Speaker groups: {len(groups)}")
     print(f"   • Target mixtures: {args.n_mixtures}")
     print(f"   • Frame ratios: {', '.join(f'{count}: {ratio:.2%}' for count, ratio in frame_ratio_map.items())}")
-    print(f"   • Minimum overlap-order coverage: {args.min_overlap_order_duration:g} ms")
-    print(f"   • Duration ratio threshold: {args.min_duration_ratio_threshold:.2%}")
-    print(f"   • Maximum session duration: {args.max_session_duration:g} ms")
-    print(f"   • Same-speaker gap: {STEP_4_SAME_SPEAKER_GAP} ms")
-    print(f"   • Configured duration: {configured_min_duration:g}–{configured_max_duration:g} ms")
-    print(f"   • Effective duration: {effective_min_duration:g}–{effective_max_duration:g} ms")
 
     for index in range(args.n_mixtures):
         mixtures.append(
@@ -871,7 +865,7 @@ def run_metadata_dir(args: argparse.Namespace) -> None:
             f"{values['duration']:.2f} s, {values['ratio']:.2%}"
         )
     print(f"   • Output: {args.out}")
-    print("✅ Frame-balanced metadata completed.")
+    print("✅ Metadata completed.")
 
 
 def parse_args() -> argparse.Namespace:
