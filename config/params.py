@@ -30,12 +30,12 @@ STEP_4_OVERLAP_RATIO = 0.2  # overlap ratio center
 STEP_4_OVERLAP_RANDOM_OFFSET = 0.05  # overlap ratio random offset
 STEP_4_SEED = 42  # random seed for reproducible metadata generation (not recommended to adjust)
 
-STEP_4_ALT_FRAME_RESOLUTION = 0.02  # frame-level timeline resolution, in seconds
-STEP_4_ALT_MIN_EVENT_DURATION = 0.5  # minimum overlap-order event duration, in seconds
-STEP_4_ALT_MAX_EVENT_DURATION = 3.0  # maximum overlap-order event duration, in seconds
-STEP_4_ALT_MIN_OVERLAP_ORDER_DURATION = 3.0  # minimum coverage per relevant overlap order, in seconds
+STEP_4_ALT_FRAME_RESOLUTION = 20  # frame-level timeline resolution, in ms
+STEP_4_ALT_MIN_EVENT_DURATION = 500  # minimum overlap-order event duration, in ms
+STEP_4_ALT_MAX_EVENT_DURATION = 5000  # maximum overlap-order event duration, in ms
+STEP_4_ALT_MIN_OVERLAP_ORDER_DURATION = 3000  # minimum coverage per relevant overlap order, in ms
 STEP_4_ALT_MIN_DURATION_RATIO_THRESHOLD = 0.05  # ratio threshold for minimum coverage
-STEP_4_ALT_MAX_SESSION_DURATION = 60.0  # maximum generated session duration, in seconds
+STEP_4_ALT_MAX_SESSION_DURATION = 60000  # maximum generated session duration, in ms
 STEP_4_ALT_RATIO_TOLERANCE = 1e-6  # tolerance for normalized overlap-ratio sums
 
 STEP_5_TRAIN_RATIO = 0.8  # dataset split ratios

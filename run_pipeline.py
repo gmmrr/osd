@@ -301,12 +301,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-speakers", type=int, default=STEP_4_MAX_SPEAKERS, help="Step 4 maximum speakers per mixture.")
     parser.add_argument("--max-speakers-per-frame", type=int, default=STEP_4_MAX_SPEAKERS_PER_FRAME, help="Step 4 maximum overlapping speakers per frame.")
     parser.add_argument("--max-speakers-per-frame-ratio", nargs="+", help="Alternative Step 4 duration ratios for counts 1 through max-speakers-per-frame, or natural.")
-    parser.add_argument("--frame-resolution", type=float, default=STEP_4_ALT_FRAME_RESOLUTION, help="Alternative Step 4 frame resolution in seconds.")
-    parser.add_argument("--min-event-duration", type=float, default=STEP_4_ALT_MIN_EVENT_DURATION, help="Alternative Step 4 minimum event duration in seconds.")
-    parser.add_argument("--max-event-duration", type=float, default=STEP_4_ALT_MAX_EVENT_DURATION, help="Alternative Step 4 maximum event duration in seconds.")
-    parser.add_argument("--min-overlap-order-duration", type=float, default=STEP_4_ALT_MIN_OVERLAP_ORDER_DURATION, help="Alternative Step 4 minimum cumulative duration for each non-zero active overlap order.")
+    parser.add_argument("--frame-resolution", type=float, default=STEP_4_ALT_FRAME_RESOLUTION, help="Alternative Step 4 frame resolution in ms.")
+    parser.add_argument("--min-event-duration", type=float, default=STEP_4_ALT_MIN_EVENT_DURATION, help="Alternative Step 4 minimum event duration in ms.")
+    parser.add_argument("--max-event-duration", type=float, default=STEP_4_ALT_MAX_EVENT_DURATION, help="Alternative Step 4 maximum event duration in ms.")
+    parser.add_argument("--min-overlap-order-duration", type=float, default=STEP_4_ALT_MIN_OVERLAP_ORDER_DURATION, help="Alternative Step 4 minimum cumulative duration in ms for each non-zero active overlap order.")
     parser.add_argument("--min-duration-ratio-threshold", type=float, default=STEP_4_ALT_MIN_DURATION_RATIO_THRESHOLD, help="Alternative Step 4 minimum ratio that controls mixture-level duration coverage.")
-    parser.add_argument("--max-session-duration", type=float, default=STEP_4_ALT_MAX_SESSION_DURATION, help="Alternative Step 4 hard maximum session duration in seconds.")
+    parser.add_argument("--max-session-duration", type=float, default=STEP_4_ALT_MAX_SESSION_DURATION, help="Alternative Step 4 hard maximum session duration in ms.")
 
     args = parser.parse_args()
     if args.work_dir is None:

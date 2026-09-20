@@ -88,7 +88,7 @@ def calculate_required_session_duration(
     minimum_ratio_threshold: float = STEP_4_ALT_MIN_DURATION_RATIO_THRESHOLD,
     frame_resolution: float = STEP_4_ALT_FRAME_RESOLUTION,
 ) -> float:
-    """Return the duration required by sufficiently frequent active overlap orders."""
+    """Return the required duration in milliseconds for sufficiently frequent overlap orders."""
     if minimum_order_duration <= 0.0:
         raise ValueError("minimum_order_duration must be positive.")
     if not 0.0 <= minimum_ratio_threshold <= 1.0:
@@ -115,7 +115,7 @@ def calculate_session_duration_range(
     max_session_duration: float,
     frame_resolution: float,
 ) -> tuple[float, float, float]:
-    """Return required, effective minimum, and effective maximum durations in seconds."""
+    """Return required, effective minimum, and effective maximum durations in milliseconds."""
     if max_session_duration <= 0.0:
         raise ValueError("max_session_duration must be positive.")
     if configured_min_duration > max_session_duration:
@@ -148,7 +148,7 @@ def allocate_frame_quotas(
     overlap_ratios: Mapping[int, float],
     frame_resolution: float,
 ) -> tuple[int, dict[int, int]]:
-    """Allocate exact integer frame quotas with the Hamilton largest-remainder method."""
+    """Allocate exact quotas from millisecond durations with the Hamilton method."""
     if n_speakers < 1:
         raise ValueError("n_speakers must be positive.")
     if duration <= 0.0 or frame_resolution <= 0.0:
@@ -196,7 +196,7 @@ def generate_count_trajectory(
     max_event_duration: float,
     rng: random.Random,
 ) -> list[dict[str, int]]:
-    """Create an exact-quota count random walk with single-speaker transitions."""
+    """Create an exact-quota count random walk from millisecond event settings."""
     if min_event_duration <= 0.0 or max_event_duration < min_event_duration:
         raise ValueError("Event durations must satisfy 0 < min_event_duration <= max_event_duration.")
     min_frames = max(1, math.ceil(min_event_duration / frame_resolution))
@@ -344,7 +344,7 @@ def assign_speaker_transitions(
 def build_continuous_timeline(
     events: Sequence[Mapping[str, Any]], frame_resolution: float
 ) -> list[dict[str, Any]]:
-    """Lay trajectory events consecutively on an integer-frame timeline."""
+    """Lay events on a frame timeline and expose metadata timestamps in seconds."""
     timeline: list[dict[str, Any]] = []
     cursor = 0
     for event in events:
@@ -355,8 +355,8 @@ def build_continuous_timeline(
                 "start_frame": cursor,
                 "end_frame": end_frame,
                 "duration_frames": duration_frames,
-                "start": round(cursor * frame_resolution, 9),
-                "end": round(end_frame * frame_resolution, 9),
+                "start": round(cursor * frame_resolution / 1000.0, 9),
+                "end": round(end_frame * frame_resolution / 1000.0, 9),
                 "num_active": int(event["num_active"]),
                 "speakers": list(event["speakers"]),
             }
@@ -401,8 +401,8 @@ def build_speaker_activity_regions(
 
     for region in regions:
         region["duration_frames"] = region["end_frame"] - region["start_frame"]
-        region["start"] = round(region["start_frame"] * frame_resolution, 9)
-        region["end"] = round(region["end_frame"] * frame_resolution, 9)
+        region["start"] = round(region["start_frame"] * frame_resolution / 1000.0, 9)
+        region["end"] = round(region["end_frame"] * frame_resolution / 1000.0, 9)
     return sorted(regions, key=lambda region: (region["start_frame"], region["speaker"]))
 
 
@@ -517,8 +517,8 @@ def _generate_timeline_metadata(
     assigned, speaker_active_frames = assign_speaker_transitions(events, speakers, rng)
     timeline = build_continuous_timeline(assigned, frame_resolution)
     metadata: dict[str, Any] = {
-        "duration": round(total_frames * frame_resolution, 9),
-        "frame_resolution": frame_resolution,
+        "duration": round(total_frames * frame_resolution / 1000.0, 9),
+        "frame_resolution": frame_resolution / 1000.0,
         "total_frames": total_frames,
         "speakers": list(speakers),
         "target_ratio": {
@@ -544,7 +544,7 @@ def generate_timeline_metadata(
     max_event_duration: float = STEP_4_ALT_MAX_EVENT_DURATION,
     seed: int = STEP_4_SEED,
 ) -> dict[str, Any]:
-    """Generate deterministic timeline metadata without allocating source utterances."""
+    """Generate timeline metadata from millisecond inputs and emit second timestamps."""
     return _generate_timeline_metadata(
         speakers,
         duration,
@@ -714,8 +714,8 @@ def build_candidate_mixture(
         for order in range(1, max_speakers_per_frame + 1)
     }
 
-    configured_min_duration = min_mixture_duration / 1000.0
-    configured_max_duration = max_mixture_duration / 1000.0
+    configured_min_duration = min_mixture_duration
+    configured_max_duration = max_mixture_duration
     required_duration, effective_min_duration, effective_max_duration = calculate_session_duration_range(
         frame_ratios,
         configured_min_duration,
@@ -760,14 +760,14 @@ def build_candidate_mixture(
         "speaker_regions": speaker_regions,
         "same_speaker_gap": STEP_4_SAME_SPEAKER_GAP / 1000.0,
         "duration_policy": {
-            "configured_min_duration": configured_min_duration,
-            "configured_max_duration": configured_max_duration,
-            "minimum_overlap_order_duration": min_overlap_order_duration,
+            "configured_min_duration": configured_min_duration / 1000.0,
+            "configured_max_duration": configured_max_duration / 1000.0,
+            "minimum_overlap_order_duration": min_overlap_order_duration / 1000.0,
             "minimum_duration_ratio_threshold": min_duration_ratio_threshold,
-            "required_duration": required_duration,
-            "effective_min_duration": effective_min_duration,
-            "effective_max_duration": effective_max_duration,
-            "max_session_duration": max_session_duration,
+            "required_duration": required_duration / 1000.0,
+            "effective_min_duration": effective_min_duration / 1000.0,
+            "effective_max_duration": effective_max_duration / 1000.0,
+            "max_session_duration": max_session_duration / 1000.0,
             "duration_constrained_orders": constrained_orders,
             "rare_overlap_orders": rare_orders,
         },
@@ -878,8 +878,8 @@ def main() -> None:
         order: active_ratios[order - 1]
         for order in range(1, args.max_speakers_per_frame + 1)
     }
-    configured_min_duration = args.min_mixture_duration / 1000.0
-    configured_max_duration = args.max_mixture_duration / 1000.0
+    configured_min_duration = args.min_mixture_duration
+    configured_max_duration = args.max_mixture_duration
     _, effective_min_duration, effective_max_duration = calculate_session_duration_range(
         frame_ratio_map,
         configured_min_duration,
@@ -893,12 +893,12 @@ def main() -> None:
     print(f"🚀 Generate frame-balanced metadata in '{args.vad_dir}'")
     print(f"   • Target mixtures: {args.n_mixtures}")
     print(f"   • Frame ratios: {', '.join(f'{count}: {ratio:.2%}' for count, ratio in frame_ratio_map.items())}")
-    print(f"   • Minimum overlap-order coverage: {args.min_overlap_order_duration:.2f} s")
+    print(f"   • Minimum overlap-order coverage: {args.min_overlap_order_duration:g} ms")
     print(f"   • Duration ratio threshold: {args.min_duration_ratio_threshold:.2%}")
-    print(f"   • Maximum session duration: {args.max_session_duration:.2f} s")
+    print(f"   • Maximum session duration: {args.max_session_duration:g} ms")
     print(f"   • Same-speaker gap: {STEP_4_SAME_SPEAKER_GAP} ms")
-    print(f"   • Configured duration: {configured_min_duration:.2f}–{configured_max_duration:.2f} s")
-    print(f"   • Effective duration: {effective_min_duration:.2f}–{effective_max_duration:.2f} s")
+    print(f"   • Configured duration: {configured_min_duration:g}–{configured_max_duration:g} ms")
+    print(f"   • Effective duration: {effective_min_duration:g}–{effective_max_duration:g} ms")
     run_metadata_dir(args)
     print(f"   • Output: {args.out}")
     print("✅ Frame-balanced metadata completed.")
