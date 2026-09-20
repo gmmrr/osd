@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,7 +12,13 @@ import lightning.pytorch as pl
 import torch
 from torch import Tensor
 
-from .model import NUM_CLASSES, Model, save_native_checkpoint
+REPO_ROOT = Path(__file__).resolve().parents[1]
+OSDC_DIR = str(REPO_ROOT / "osdc")
+if OSDC_DIR in sys.path:
+    sys.path.remove(OSDC_DIR)
+sys.path.insert(0, str(REPO_ROOT))
+
+from osdc.model import NUM_CLASSES, Model, save_native_checkpoint
 
 DEFAULT_SEED = 42
 

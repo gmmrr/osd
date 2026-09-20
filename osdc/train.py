@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -12,9 +13,13 @@ from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from torch.utils.data import DataLoader
 
-from .model import NUM_CLASSES, Model, OSDCChunkDataset
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
+OSDC_DIR = str(REPO_ROOT / "osdc")
+if OSDC_DIR in sys.path:
+    sys.path.remove(OSDC_DIR)
+sys.path.insert(0, str(REPO_ROOT))
+
+from osdc.model import NUM_CLASSES, Model, OSDCChunkDataset
 
 DEFAULT_MODEL_DIR = REPO_ROOT / "osdc" / "models" / "segmentation-3.0-based-v0"
 DEFAULT_CHUNK_DURATION = 10.0 # the value when pretrained, highly recommended not to change

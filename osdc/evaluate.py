@@ -5,12 +5,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
 
-from .model import CLASS_LABELS, Model, OSDCChunkDataset
+REPO_ROOT = Path(__file__).resolve().parents[1]
+OSDC_DIR = str(REPO_ROOT / "osdc")
+if OSDC_DIR in sys.path:
+    sys.path.remove(OSDC_DIR)
+sys.path.insert(0, str(REPO_ROOT))
+
+from osdc.model import CLASS_LABELS, Model, OSDCChunkDataset
 
 
 @torch.inference_mode()

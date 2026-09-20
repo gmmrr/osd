@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -12,9 +13,13 @@ from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from torch.utils.data import DataLoader
 
-from ..model import NUM_CLASSES, Model, OSDCChunkDataset
+REPO_ROOT = Path(__file__).resolve().parents[2]
+OSDC_DIR = str(REPO_ROOT / "osdc")
+if OSDC_DIR in sys.path:
+    sys.path.remove(OSDC_DIR)
+sys.path.insert(0, str(REPO_ROOT))
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+from osdc.model import NUM_CLASSES, Model, OSDCChunkDataset
 
 DEFAULT_MODEL_DIR = REPO_ROOT / "osdc" / "alternatives" / "models" / "randomized-based-v0"
 DEFAULT_CHUNK_DURATION = 10.0
@@ -50,7 +55,7 @@ def run_training(
             weight_decay=weight_decay,
         )
     else:
-        model_path = model_dir if model_dir.is_file() else model_dir / "pytorch_model.bin"
+        model_path = model_dir if model_dir.is_file() else model_dir / "checkpoints" / "last.ckpt"
         model = Model.from_checkpoint(
             model_path,
             learning_rate=learning_rate,
