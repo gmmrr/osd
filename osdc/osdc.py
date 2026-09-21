@@ -36,9 +36,16 @@ class DetectionSummary:
 
 def resolve_device(device: str) -> torch.device:
     if device == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
     if device == "cuda" and not torch.cuda.is_available():
         print("⚠️  CUDA requested but not available, falling back to CPU.")
+        return torch.device("cpu")
+    if device == "mps" and not torch.backends.mps.is_available():
+        print("⚠️  MPS requested but not available, falling back to CPU.")
         return torch.device("cpu")
     return torch.device(device)
 
@@ -190,7 +197,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--model-path", type=Path, required=True)
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
+    parser.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
     return parser.parse_args()
 
 
