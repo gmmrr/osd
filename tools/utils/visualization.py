@@ -644,7 +644,7 @@ class VisualizationPanelWidget(QWidget):
         view_y_min, view_y_max = self.plot.getViewBox().viewRange()[1]
         self._add_speaker_regions(panel_spec, view_y_min, view_y_max)
         self._add_overlay_regions(panel_spec)
-        self._add_speaker_count_strip(panel_spec)
+        self._add_speaker_count_strip(panel_spec, plot_background)
 
         self.playhead = pg.InfiniteLine(pos=0.0, angle=90, movable=False, pen=pg.mkPen(COLOR_PLAYHEAD, width=2))
         self.playhead.setZValue(50)
@@ -690,6 +690,7 @@ class VisualizationPanelWidget(QWidget):
     def _add_speaker_count_strip(
         self,
         panel_spec: VisualizationPanelSpec,
+        background_color: str,
     ) -> None:
         if not self.show_speaker_count_strip:
             return
@@ -704,9 +705,14 @@ class VisualizationPanelWidget(QWidget):
         self.plot.plotItem.layout.setRowSpacing(3, 6)
 
         max_count = panel_spec.max_speaker_count
+        background = QColor(background_color)
         for interval in panel_spec.speaker_count_intervals:
-            gray = round(255 * (max_count - interval.count) / max_count)
-            color = QColor(gray, gray, gray)
+            background_ratio = (max_count - interval.count) / max_count
+            color = QColor(
+                round(background.red() * background_ratio),
+                round(background.green() * background_ratio),
+                round(background.blue() * background_ratio),
+            )
             rect = QGraphicsRectItem(
                 interval.start,
                 0.0,
