@@ -1,10 +1,14 @@
 from torch.utils.data import Dataset
 import glob
 import os
+import sys
 from pathlib import Path
 import soundfile as sf
 import numpy as np
 import torch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
 from osdc.utils.oladd import _gen_frame_indices
 import random
 
@@ -369,4 +373,3 @@ if __name__ == "__main__":
     from torch.utils.data import DataLoader
     for i in DataLoader(a, batch_size=3, shuffle=True):
         print(i)
-

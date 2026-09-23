@@ -1,5 +1,8 @@
 import os
 import argparse
+import sys
+from pathlib import Path
+
 import yaml
 import torch
 from torch import nn
@@ -8,6 +11,10 @@ from torch.utils.data import DataLoader
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
+
+# Run CornellOSDC directly from this source tree without installing it as a
+# separate Python project.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from osdc.models.tcn import TCN
 from online_data import OnlineFeats

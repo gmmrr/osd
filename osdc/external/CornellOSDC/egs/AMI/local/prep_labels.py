@@ -4,9 +4,13 @@ import numpy as np
 import argparse
 import json
 import yaml
-from osdc.utils.annotations import merge_intervals
 import glob
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from osdc.utils.annotations import merge_intervals
 
 parser = argparse.ArgumentParser("prep labels")
 parser.add_argument("ami_audio_root", type=str)
@@ -94,7 +98,6 @@ if __name__ == "__main__":
         #assert not np.where(dummy > 4)[0].any()
         dummy = np.clip(dummy, 0, 4)
         sf.write(os.path.join(args.out_folder, "LABEL-{}.wav".format(sess)), dummy, fs, subtype="FLOAT")
-
 
 
 
