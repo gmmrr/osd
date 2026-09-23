@@ -179,7 +179,7 @@ def extract_features(waveform: np.ndarray, config: Mapping[str, Any]) -> np.ndar
 
 
 def load_model(checkpoint: Path, device: torch.device) -> nn.Module:
-    """Recreate the architecture from train_m4.py and load its Lightning state."""
+    """Recreate the architecture from the AMI training script and load its Lightning state."""
 
     payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
     if not isinstance(payload, Mapping):

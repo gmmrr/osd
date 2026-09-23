@@ -41,9 +41,9 @@ data:
   segment: 500
   fs: 16000
   custom_json_folder:
-  chime6_root: /Users/gmmrr/Documents/GitHub/osd/osdc/external/CornellOSDC/egs/AMI/data/AMI/amicorpus
-  label_train: /Users/gmmrr/Documents/GitHub/osd/osdc/external/CornellOSDC/egs/AMI/data/AMI/fa_labels/train
-  label_val: /Users/gmmrr/Documents/GitHub/osd/osdc/external/CornellOSDC/egs/AMI/data/AMI/fa_labels/dev
+  chime6_root: /path/to/amicorpus
+  label_train: /path/to/fa_labels/train
+  label_val: /path/to/fa_labels/dev
 opt:
   lr: 0.00015
   weight_decay: !!float 1e-5

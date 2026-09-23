@@ -1,7 +1,7 @@
 model: tcn
 task: count
 feats:
-  type: mfcc_kaldi # filterbanks actually if num ceps == num mels
+  type: mfcc_kaldi
   hop_size: 0.01
   n_feats: 80
   inject_noise: false
@@ -35,26 +35,25 @@ spectrogram_kaldi:
 labels:
   merge_vad: 0.0
   merge_ph: 0.0
-  collar_ph: 0.00
+  collar_ph: 0.0
 data:
   n_classes: 5
   segment: 500
   fs: 16000
   custom_json_folder:
-  chime6_root: /media/sam/bx500/amicorpus/audio/
-  label_train: /media/sam/bx500/amicorpus/fa_labels/train
-  label_val: /media/sam/bx500/amicorpus/fa_labels/dev
+  chime6_root: /path/to/amicorpus
+  label_train: /path/to/fa_labels/train
+  label_val: /path/to/fa_labels/dev
 opt:
   lr: 0.00015
   weight_decay: !!float 1e-5
 training:
-  batch_size: 8
-  num_workers: 8
+  batch_size: 2
+  num_workers: 0
   n_epochs: 200
   gradient_clip: 5
-  accumulate_batches: 1
+  accumulate_batches: 4
 augmentation:
   probs: [0.3, 0.7]
   abs_stats: [-16.7, 7]
   rel_stats: [2.78, 4]
-
