@@ -1,0 +1,14 @@
+# Python 3.12.9; osdc/{train,model,model_to_v0,osdc,evaluate}.py,
+# osdc/alternatives/train.py, tools/*visualization.py
+torch==2.13.0
+torchaudio==2.11.0
+lightning==2.6.5
+pyannote-audio==4.0.7
+pyannote-core==6.0.1
+numpy==2.4.6
+scipy==1.18.0
+soundfile==0.14.0
+matplotlib==3.11.0
+pyqtgraph==0.14.0
+PySide6==6.11.1
+tensorboardX==2.6.5
