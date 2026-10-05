@@ -13,6 +13,8 @@ import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PIPELINE_PATH = REPO_ROOT / "diarization" / "sd3" / "models" / "speaker-diarization-3.0"
+DEFAULT_OSD_MODEL = REPO_ROOT / "osd" / "models" / "pyannote-segmentation-3.0"
+DEFAULT_EMBEDDING_MODEL = REPO_ROOT / "diarization" / "sd3" / "models" / "wespeaker-voxceleb-resnet34-LM"
 MAX_SPEAKERS = 3
 MAX_SPEAKERS_PER_FRAME = 2
 
@@ -51,11 +53,13 @@ def resolve_pipeline_config(path: Path) -> Path:
     return config
 
 
-def validate_model_file(path: Path) -> Path:
-    """Require the adapted segmentation model path to be a file."""
-    if not path.is_file():
-        raise FileNotFoundError(f"Segmentation model file not found: {path}")
-    return path
+def resolve_model_file(path: Path) -> Path:
+    """Resolve an original model directory or a fine-tuned pyannote checkpoint."""
+    path = (path if path.is_absolute() else REPO_ROOT / path).resolve()
+    checkpoint = path / "pytorch_model.bin" if path.is_dir() else path
+    if not checkpoint.is_file():
+        raise FileNotFoundError(f"Model checkpoint not found: {checkpoint}")
+    return checkpoint
 
 
 def validate_native_segmentation(model: Any, description: str) -> None:
@@ -79,51 +83,32 @@ def validate_native_segmentation(model: Any, description: str) -> None:
 
 
 def load_pipeline(
-    model_path: Path | None,
+    osd_model: Path,
+    embedding_model: Path,
     device: torch.device,
 ):
-    """Load a local pipeline directory and optionally replace its segmentation model."""
-    from pyannote.audio import Inference, Model, Pipeline
+    """Build the original pyannote pipeline with two selected model weights."""
+    import yaml
+    from pyannote.audio import Model, Pipeline
 
     pipeline_config = resolve_pipeline_config(DEFAULT_PIPELINE_PATH)
-    pipeline = Pipeline.from_pretrained(str(pipeline_config))
+    segmentation = Model.from_pretrained(resolve_model_file(osd_model), map_location="cpu")
+    embedding = Model.from_pretrained(resolve_model_file(embedding_model), map_location="cpu")
+    if segmentation is None or embedding is None:
+        raise RuntimeError("Could not load the selected segmentation or embedding model.")
+    validate_native_segmentation(segmentation, "Selected segmentation model")
+    if embedding.__class__.__name__ != "WeSpeakerResNet34":
+        raise ValueError("Selected embedding checkpoint must be WeSpeakerResNet34.")
+
+    # Pass loaded model objects to pyannote. pyannote.audio 4.0.7 otherwise
+    # interprets any path containing 'wespeaker' as ONNX, even for PyTorch files.
+    config = yaml.safe_load(pipeline_config.read_text(encoding="utf-8"))
+    config["pipeline"]["params"]["segmentation"] = segmentation
+    config["pipeline"]["params"]["embedding"] = embedding
+    config["pipeline"]["params"]["legacy"] = True
+    pipeline = Pipeline.from_pretrained(config)
     if pipeline is None:
-        raise RuntimeError(
-            f"Could not load local pipeline '{DEFAULT_PIPELINE_PATH}'. Check its config.yaml "
-            "and referenced model files."
-        )
-
-    validate_native_segmentation(
-        pipeline._segmentation.model, "Pretrained pipeline segmentation"
-    )
-
-    if model_path is not None:
-        model_path = validate_model_file(model_path)
-        adapted_model = Model.from_pretrained(model_path, map_location="cpu")
-        if adapted_model is None:
-            raise RuntimeError(f"Could not load segmentation model: {model_path}")
-        validate_native_segmentation(adapted_model, "Adapted segmentation model")
-
-        original = pipeline._segmentation.model.specifications
-        adapted = adapted_model.specifications
-        if adapted.duration != original.duration:
-            raise ValueError(
-                "Adapted segmentation chunk duration does not match the pipeline: "
-                f"{adapted.duration:g}s != {original.duration:g}s."
-            )
-
-        previous_inference = pipeline._segmentation
-        pipeline._segmentation = Inference(
-            adapted_model,
-            duration=previous_inference.duration,
-            step=previous_inference.step,
-            pre_aggregation_hook=previous_inference.pre_aggregation_hook,
-            skip_aggregation=previous_inference.skip_aggregation,
-            skip_conversion=previous_inference.skip_conversion,
-            batch_size=previous_inference.batch_size,
-        )
-        pipeline._frames = adapted_model.example_output.frames
-        pipeline.segmentation_model = adapted_model
+        raise RuntimeError(f"Could not load pipeline config: {pipeline_config}")
 
     try:
         pipeline.to(device)
@@ -187,19 +172,20 @@ def print_summary(annotation: Any) -> None:
 
 def diarize_file(
     audio_path: Path,
-    model_path: Path | None,
+    osd_model: Path,
+    embedding_model: Path,
     output_rttm: Path | None,
     output_json: Path | None,
     device_name: str,
     pipeline: Any | None = None,
 ):
-    """Run baseline or NvvMix-adapted full speaker diarization."""
+    """Run one selected segmentation and embedding combination."""
     if not audio_path.is_file():
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
     device = resolve_device(device_name)
 
     if pipeline is None:
-        pipeline = load_pipeline(model_path, device)
+        pipeline = load_pipeline(osd_model, embedding_model, device)
     try:
         annotation = pipeline(str(audio_path))
     except RuntimeError as error:
@@ -215,7 +201,6 @@ def diarize_file(
                 f"MPS inference failed ({error}); CPU retry also failed ({cpu_error})."
             ) from cpu_error
 
-    print_summary(annotation)
     if output_rttm is not None:
         write_rttm(annotation, output_rttm)
     if output_json is not None:
@@ -226,7 +211,8 @@ def diarize_file(
 def run_diarization(
     input_dir: Path,
     output_dir: Path,
-    model_path: Path | None,
+    osd_model: Path,
+    embedding_model: Path,
     device_name: str,
     force: bool = False,
 ) -> None:
@@ -238,27 +224,38 @@ def run_diarization(
         return
 
     device = resolve_device(device_name)
-    pipeline = load_pipeline(model_path, device)
-    for audio_path in input_files:
+    pipeline = load_pipeline(osd_model, embedding_model, device)
+    skipped = 0
+    total = len(input_files)
+    for index, audio_path in enumerate(input_files, start=1):
         output_rttm = output_dir / f"{audio_path.stem}.rttm"
         output_json = output_dir / f"{audio_path.stem}.json"
         if output_rttm.exists() and output_json.exists() and not force:
-            print(f"   • Skipping existing outputs: {output_rttm.name}, {output_json.name}")
-            continue
-        diarize_file(
-            audio_path=audio_path,
-            model_path=model_path,
-            output_rttm=output_rttm,
-            output_json=output_json,
-            device_name=device_name,
-            pipeline=pipeline,
+            skipped += 1
+        else:
+            diarize_file(
+                audio_path=audio_path,
+                osd_model=osd_model,
+                embedding_model=embedding_model,
+                output_rttm=output_rttm,
+                output_json=output_json,
+                device_name=device_name,
+                pipeline=pipeline,
+            )
+        print(
+            f"Progress: {100.0 * index / total:6.2f}% ({index}/{total}) | "
+            f"Skipped: {skipped}/{total}",
+            end="\r",
+            flush=True,
         )
+    print()
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run pyannote speaker-diarization-3.0 with its original segmentation or an NvvMix-adapted segmentation model.")
+    parser = argparse.ArgumentParser(description="Run pyannote speaker-diarization-3.0 with selected segmentation and WeSpeaker models.")
     parser.add_argument("--input-dir", type=Path, required=True, help="Input directory containing WAV files.")
-    parser.add_argument("--model-path",type=Path,help="NvvMix-adapted segmentation model file. Omit for the baseline.")
+    parser.add_argument("--osd-model", "--model-path", type=Path, default=DEFAULT_OSD_MODEL, help="Segmentation model directory or checkpoint (default: original under osd/models/).")
+    parser.add_argument("--embedding-model", type=Path, default=DEFAULT_EMBEDDING_MODEL, help="WeSpeaker model directory or checkpoint (default: original under diarization/sd3/models/).")
     parser.add_argument("--output-dir", type=Path, required=True, help="Directory where RTTM and JSON files will be written.")
     parser.add_argument("--force", action="store_true", help="Overwrite existing RTTM and JSON files.")
     parser.add_argument("--device", choices=["auto", "cpu", "mps", "cuda"], default="auto", help="Execution device. auto prefers MPS, then CPU.")
@@ -270,19 +267,18 @@ def main() -> None:
     input_files = discover_input_files(args.input_dir)
     if input_files:
         device = resolve_device(args.device)
-        mode = "NvvMix-adapted segmentation" if args.model_path else "original pretrained baseline"
         print(f"🚀 Diarization in '{args.input_dir}'")
         print(f"   • Files: {len(input_files)}")
-        print(f"   • Mode: {mode}")
         print(f"   • Pipeline: {DEFAULT_PIPELINE_PATH}")
         print(f"   • Device: {device}")
-        if args.model_path:
-            print(f"   • Model: {args.model_path}")
+        print(f"   • Segmentation: {resolve_model_file(args.osd_model)}")
+        print(f"   • Embedding: {resolve_model_file(args.embedding_model)}")
 
     run_diarization(
         input_dir=args.input_dir,
         output_dir=args.output_dir,
-        model_path=args.model_path,
+        osd_model=args.osd_model,
+        embedding_model=args.embedding_model,
         device_name=args.device,
         force=args.force,
     )

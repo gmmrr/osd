@@ -7,7 +7,7 @@ pipeline:
     embedding: /Users/gmmrr/Documents/GitHub/osd/diarization/sd3/models/wespeaker-voxceleb-resnet34-LM/speaker-embedding.onnx
     embedding_batch_size: 1
     embedding_exclude_overlap: true
-    segmentation: /Users/gmmrr/Documents/GitHub/osd/diarization/sd3/models/segmentation-3.0/pytorch_model.bin
+    segmentation: /Users/gmmrr/Documents/GitHub/osd/osd/models/pyannote-segmentation-3.0/pytorch_model.bin
     segmentation_batch_size: 32
 
 params:
