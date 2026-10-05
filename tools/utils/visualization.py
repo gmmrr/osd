@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Iterable
 
 import numpy as np
+
+os.environ.setdefault("PYQTGRAPH_QT_LIB", "PySide6")
 import pyqtgraph as pg
 import scipy.signal
 import soundfile as sf
