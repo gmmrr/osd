@@ -110,6 +110,11 @@ def render_mix(
         audio_path = Path(source["audio"])
         audio = load_source_audio(audio_path, sample_rate)
         segment = slice_audio(audio, float(source["orig_start"]), float(source["orig_end"]), sample_rate)
+        expected_samples = int(round(float(source["orig_end"]) * sample_rate)) - int(
+            round(float(source["orig_start"]) * sample_rate)
+        )
+        if segment.shape[1] != expected_samples:
+            raise ValueError(f"Source audio ends before the labelled speech interval: {audio_path}")
         if segment.size:
             segment = segment * float(10 ** (float(source.get("gain_db", 0.0)) / 20))
 

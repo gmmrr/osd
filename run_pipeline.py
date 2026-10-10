@@ -28,6 +28,8 @@ from config.params import (
     STEP_4_ALT_MAX_SESSION_DURATION,
     STEP_4_ALT_MIN_DURATION_RATIO_THRESHOLD,
     STEP_4_ALT_MIN_EVENT_DURATION,
+    STEP_4_ALT_MIN_TRANSITION_FRAMES,
+    STEP_4_ALT_MAX_TRANSITION_FRAMES,
     STEP_4_ALT_MIN_OVERLAP_ORDER_DURATION,
     STEP_4_MAX_BUILD_TRIALS,
     STEP_4_MAX_MIXTURE_DURATION,
@@ -43,7 +45,10 @@ from pipeline.step_1_standardize import run_standardize_dir
 from pipeline.step_2_normalize import run_normalize_dir
 from pipeline.step_3_vad import run_vad_dir
 from pipeline.step_4_metadata import run_metadata_dir
-from pipeline.alternatives.step_4_metadata_multiple import run_metadata_dir as run_metadata_multiple_dir
+from pipeline.alternatives.step_4_metadata_multiple import (
+    dataset_generation_signature,
+    run_metadata_dir as run_metadata_multiple_dir,
+)
 from pipeline.step_5_mix import run_mix_dir
 
 
@@ -140,6 +145,8 @@ def build_step4_args(
         frame_resolution=args.frame_resolution,
         min_event_duration=args.min_event_duration,
         max_event_duration=args.max_event_duration,
+        min_transition_frames=getattr(args, "min_transition_frames", STEP_4_ALT_MIN_TRANSITION_FRAMES),
+        max_transition_frames=getattr(args, "max_transition_frames", STEP_4_ALT_MAX_TRANSITION_FRAMES),
         min_overlap_order_duration=args.min_overlap_order_duration,
         min_duration_ratio_threshold=args.min_duration_ratio_threshold,
         max_session_duration=args.max_session_duration,
@@ -181,6 +188,20 @@ def run_pipeline(args: argparse.Namespace) -> None:
     existing_count = len(existing_records)
     resume_enabled = 0 < existing_count < args.n_mixtures
     reuse_existing = existing_count >= args.n_mixtures
+    if use_multiple_metadata and existing_records:
+        if any(record.get("generation_policy") != "dataset_level" for record in existing_records):
+            raise ValueError("Existing mix.json uses the old per-mixture policy; use --force to regenerate it.")
+        if existing_count != args.n_mixtures:
+            raise ValueError(
+                "Dataset-level frame quotas and shuffled URIs depend on --n-mixtures; "
+                "use --force to regenerate with a new total."
+            )
+        expected_signature = dataset_generation_signature(
+            build_step4_args(vad_dir=work_dir, out=mix_json, n_mixtures=args.n_mixtures,
+                             args=args, force=False)
+        )
+        if any(record.get("generation_signature") != expected_signature for record in existing_records):
+            raise ValueError("Existing mix.json was generated with different Step 4 settings; use --force.")
 
     link_workspace_inputs(input_dir, work_dir, force=args.force)
 
@@ -304,8 +325,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frame-resolution", type=float, default=STEP_4_ALT_FRAME_RESOLUTION, help="Alternative Step 4 frame resolution in ms.")
     parser.add_argument("--min-event-duration", type=float, default=STEP_4_ALT_MIN_EVENT_DURATION, help="Alternative Step 4 minimum event duration in ms.")
     parser.add_argument("--max-event-duration", type=float, default=STEP_4_ALT_MAX_EVENT_DURATION, help="Alternative Step 4 maximum event duration in ms.")
-    parser.add_argument("--min-overlap-order-duration", type=float, default=STEP_4_ALT_MIN_OVERLAP_ORDER_DURATION, help="Alternative Step 4 minimum cumulative duration in ms for each non-zero active overlap order.")
-    parser.add_argument("--min-duration-ratio-threshold", type=float, default=STEP_4_ALT_MIN_DURATION_RATIO_THRESHOLD, help="Alternative Step 4 minimum ratio that controls mixture-level duration coverage.")
+    parser.add_argument("--min-transition-frames", type=int, default=STEP_4_ALT_MIN_TRANSITION_FRAMES, help="Shortest bridge event in frame-resolution units.")
+    parser.add_argument("--max-transition-frames", type=int, default=STEP_4_ALT_MAX_TRANSITION_FRAMES, help="Longest bridge event in frame-resolution units.")
+    parser.add_argument("--min-overlap-order-duration", type=float, default=STEP_4_ALT_MIN_OVERLAP_ORDER_DURATION, help="Alternative Step 4 minimum normal target-event duration in ms.")
+    parser.add_argument("--min-duration-ratio-threshold", type=float, default=STEP_4_ALT_MIN_DURATION_RATIO_THRESHOLD, help="Compatibility setting for reporting rare orders; does not lengthen mixtures.")
     parser.add_argument("--max-session-duration", type=float, default=STEP_4_ALT_MAX_SESSION_DURATION, help="Alternative Step 4 hard maximum session duration in ms.")
 
     args = parser.parse_args()

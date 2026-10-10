@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import math
 import random
 import sys
@@ -24,13 +26,14 @@ from config.params import (
     STEP_4_ALT_MAX_SESSION_DURATION,
     STEP_4_ALT_MIN_DURATION_RATIO_THRESHOLD,
     STEP_4_ALT_MIN_EVENT_DURATION,
+    STEP_4_ALT_MIN_TRANSITION_FRAMES,
+    STEP_4_ALT_MAX_TRANSITION_FRAMES,
     STEP_4_ALT_MIN_OVERLAP_ORDER_DURATION,
     STEP_4_ALT_RATIO_TOLERANCE,
     STEP_4_GAIN_DB_RANGE,
     STEP_4_MAX_MIXTURE_DURATION,
     STEP_4_MIN_MIXTURE_DURATION,
     STEP_4_MIN_SEGMENT_DURATION,
-    STEP_4_SAME_SPEAKER_GAP,
     STEP_4_SEED,
 )
 from pipeline.step_4_metadata import (
@@ -176,15 +179,22 @@ def _split_frame_quota(
     rng: random.Random,
 ) -> list[int]:
     """Split one quota without creating a short remainder unless the whole quota is short."""
+    if quota <= 0:
+        return []
+    if quota < min_frames:
+        return [quota]
     chunks: list[int] = []
+    n_chunks = math.ceil(quota / max_frames)
     remaining = quota
-    while remaining > max_frames:
-        upper = min(max_frames, remaining - min_frames)
-        duration = rng.randint(min_frames, upper) if upper >= min_frames else max_frames
+    for index in range(n_chunks):
+        later = n_chunks - index - 1
+        lower = max(min_frames, remaining - later * max_frames)
+        upper = min(max_frames, remaining - later * min_frames)
+        if upper < lower:
+            raise ValueError("Frame quota cannot be divided into normal event durations.")
+        duration = rng.randint(lower, upper)
         chunks.append(duration)
         remaining -= duration
-    if remaining:
-        chunks.append(remaining)
     rng.shuffle(chunks)
     return chunks
 
@@ -285,6 +295,271 @@ def generate_count_trajectory(
     ]
 
 
+def plan_dataset_trajectories(
+    durations: Sequence[int],
+    count_ratios: Sequence[float],
+    max_speakers: int,
+    min_event_frames: int,
+    max_event_frames: int,
+    min_transition_frames: int,
+    max_transition_frames: int,
+    rng: random.Random,
+    min_single_frames: int | None = None,
+) -> tuple[list[list[dict[str, Any]]], dict[int, int]]:
+    """Spend one exact dataset quota on varied, speaker-continuous excursions."""
+    max_count = len(count_ratios)
+    if max_speakers < max_count:
+        raise ValueError("max_speakers must be at least max_speakers_per_frame.")
+    if not durations or any(duration <= 0 for duration in durations):
+        raise ValueError("Dataset durations must contain positive frame counts.")
+    if min_event_frames < 1 or max_event_frames < min_event_frames:
+        raise ValueError("Invalid normal event duration in frames.")
+    if min_transition_frames < 1 or max_transition_frames < min_transition_frames:
+        raise ValueError("Transition frames must satisfy 1 <= minimum <= maximum.")
+    min_single_frames = min_event_frames if min_single_frames is None else min_single_frames
+    if min_single_frames < 1 or min_single_frames > max_event_frames:
+        raise ValueError("Invalid one-speaker normal event duration in frames.")
+
+    ratios = normalize_count_ratios(count_ratios, max_count)
+    _, target = allocate_frame_quotas(
+        max_count, sum(durations), {order: ratios[order - 1] for order in range(1, max_count + 1)}, 1
+    )
+    remaining = dict(target)
+    trips: list[list[list[dict[str, Any]]]] = [[] for _ in durations]
+    used_non_single = [0] * len(durations)
+    minimum_single = len(durations)
+
+    def bridge_reserve(order: int, quota: Mapping[int, int]) -> int:
+        return 2 * min_transition_frames * sum(
+            math.ceil(quota[higher] / min_event_frames)
+            for higher in range(order + 1, max_count + 1)
+        )
+
+    # Each session must have enough joins to use all max_speakers distinct sources.
+    # These short rotations are real, accounted-for two-speaker events.
+    rotations = max_speakers - 1
+    baseline_two = len(durations) * rotations * min_transition_frames
+    if remaining.get(2, 0) < baseline_two + bridge_reserve(2, remaining):
+        raise ValueError("Dataset two-speaker quota cannot support distinct speakers and required bridges.")
+    if remaining[1] < len(durations) * (rotations + 1):
+        raise ValueError("Dataset one-speaker quota cannot separate the required speaker turns.")
+    transition_slack = remaining[2] - baseline_two - bridge_reserve(2, remaining)
+    for index, duration in enumerate(durations):
+        for _ in range(rotations):
+            extra = rng.randint(0, min(max_transition_frames - min_transition_frames, transition_slack))
+            transition_slack -= extra
+            frames = min_transition_frames + extra
+            trips[index].append([{"num_active": 2, "duration_frames": frames, "event_type": "transition"}])
+            remaining[2] -= frames
+            used_non_single[index] += frames
+        if used_non_single[index] + len(trips[index]) + 1 > duration:
+            raise ValueError("A mixture is too short for its distinct speakers and transition events.")
+    minimum_single = sum(len(items) + 1 for items in trips)
+
+    def free_frames(index: int) -> int:
+        return durations[index] - used_non_single[index] - len(trips[index]) - 1
+
+    def can_split_normal(frames: int) -> bool:
+        return frames == 0 or math.ceil(frames / max_event_frames) <= frames // min_event_frames
+
+    while True:
+        available = {
+            order: remaining[order] - bridge_reserve(order, remaining)
+            for order in range(2, max_count + 1)
+        }
+        candidates = [order for order, frames in available.items() if frames >= min_event_frames]
+        if not candidates:
+            break
+        attempted: set[int] = set()
+        placed = False
+        while len(attempted) < len(candidates):
+            choices = [order for order in candidates if order not in attempted]
+            weights = [available[order] / max_event_frames for order in choices]
+            order = rng.choices(choices, weights=weights, k=1)[0]
+            attempted.add(order)
+            spendable = available[order]
+            lengths = [
+                length
+                for length in range(min_event_frames, min(max_event_frames, spendable) + 1)
+                if can_split_normal(spendable - length)
+            ]
+            if not lengths:
+                continue
+            normal_frames = rng.choice(lengths)
+
+            bridge_frames: dict[int, int] = {}
+            feasible = True
+            for intermediate in range(2, order):
+                future = dict(remaining)
+                future[order] -= normal_frames
+                reserve = bridge_reserve(intermediate, future)
+                allowed = min(
+                    max_transition_frames,
+                    (remaining[intermediate] - reserve) // 2,
+                )
+                if allowed < min_transition_frames:
+                    feasible = False
+                    break
+                bridge_frames[intermediate] = rng.randint(min_transition_frames, allowed)
+            if not feasible:
+                continue
+
+            cost = normal_frames + 2 * sum(bridge_frames.values())
+            if minimum_single + 1 > remaining[1]:
+                continue
+            eligible = [
+                index for index in (rng.randrange(len(durations)) for _ in range(24))
+                if free_frames(index) >= cost + 1
+            ]
+            if eligible:
+                index = rng.choice(eligible)
+            else:
+                fallback = [index for index in range(len(durations)) if free_frames(index) >= cost + 1]
+                index = rng.choice(fallback) if fallback else None
+            if index is None:
+                continue
+            trip = [
+                {"num_active": intermediate, "duration_frames": bridge_frames[intermediate], "event_type": "transition"}
+                for intermediate in range(2, order)
+            ]
+            trip.append({"num_active": order, "duration_frames": normal_frames, "event_type": "normal"})
+            trip.extend(
+                {"num_active": intermediate, "duration_frames": bridge_frames[intermediate], "event_type": "transition"}
+                for intermediate in range(order - 1, 1, -1)
+            )
+            spent = Counter({order: normal_frames})
+            for intermediate, frames in bridge_frames.items():
+                spent[intermediate] += 2 * frames
+            extra_capacity = free_frames(index) - cost - 1
+
+            def can_add(level: int, frames: int) -> bool:
+                if frames > extra_capacity:
+                    return False
+                future = {
+                    count: remaining[count] - spent[count] - (frames if count == level else 0)
+                    for count in remaining
+                }
+                return future[level] >= bridge_reserve(level, future)
+
+            def add_frames(level: int, frames: int) -> None:
+                nonlocal extra_capacity
+                spent[level] += frames
+                extra_capacity -= frames
+
+            # Give an ascent through several orders time to develop whenever
+            # the remaining dataset quota can support a normal intermediate event.
+            ascent = trip[:order - 2]
+            rng.shuffle(ascent)
+            for event in ascent:
+                level = event["num_active"]
+                extra = min_event_frames - event["duration_frames"]
+                if extra > 0 and can_add(level, extra):
+                    event["duration_frames"] += extra
+                    event["event_type"] = "normal"
+                    add_frames(level, extra)
+                    break
+
+            # Local reversals can occur on the way up and at the peak.  A
+            # normal dwell at both ends prevents a one-frame bounce while all
+            # added frames still come from the exact dataset quotas.
+            for level in range(3, order + 1):
+                for _ in range(2):
+                    if rng.random() >= 0.45:
+                        break
+                    lower = level - 1
+                    if not can_add(lower, min_event_frames):
+                        break
+                    add_frames(lower, min_event_frames)
+                    if not can_add(level, min_event_frames):
+                        spent[lower] -= min_event_frames
+                        extra_capacity += min_event_frames
+                        break
+                    add_frames(level, min_event_frames)
+                    ascent_index = next(
+                        position for position, event in enumerate(trip)
+                        if event["num_active"] == level
+                    )
+                    trip[ascent_index + 1:ascent_index + 1] = [
+                        {"num_active": lower, "duration_frames": min_event_frames, "event_type": "normal"},
+                        {"num_active": level, "duration_frames": min_event_frames, "event_type": "normal"},
+                    ]
+            cost = sum(spent.values())
+            trips[index].append(trip)
+            used_non_single[index] += cost
+            for level, frames in spent.items():
+                remaining[level] -= frames
+            minimum_single += 1
+            placed = True
+            break
+        if not placed:
+            break
+
+    # Discrete remainders can be added to an existing event without adding a turn.
+    for order in range(max_count, 1, -1):
+        while remaining[order] > 0:
+            extendable = [
+                (index, event)
+                for index, session in enumerate(trips)
+                if free_frames(index) > 0
+                for trip in session
+                for event in trip
+                if event["num_active"] == order
+                and event["duration_frames"] < (
+                    max_event_frames if event["event_type"] == "normal" else max_transition_frames
+                )
+            ]
+            if not extendable:
+                raise ValueError(
+                    f"Dataset quota for {order} speakers cannot be realized with the "
+                    "configured normal and transition durations."
+                )
+            index, event = rng.choice(extendable)
+            event["duration_frames"] += 1
+            used_non_single[index] += 1
+            remaining[order] -= 1
+
+    if sum(durations[index] - used_non_single[index] for index in range(len(durations))) != target[1]:
+        raise RuntimeError("Dataset quota accounting failed before one-speaker filling.")
+
+    trajectories: list[list[dict[str, Any]]] = []
+    for index, session in enumerate(trips):
+        rng.shuffle(session)
+        single_frames = durations[index] - used_non_single[index]
+        n_gaps = len(session) + 1
+        gap_minimum = min_single_frames if single_frames >= n_gaps * min_single_frames else 1
+        gaps = [gap_minimum] * n_gaps
+        extra = single_frames - n_gaps * gap_minimum
+        weights = [rng.random() + 0.01 for _ in gaps]
+        total_weight = sum(weights)
+        shares = [extra * weight / total_weight for weight in weights]
+        for gap, share in enumerate(shares):
+            gaps[gap] += math.floor(share)
+        for gap in sorted(range(n_gaps), key=lambda item: (-(shares[item] % 1), item))[:extra - sum(math.floor(share) for share in shares)]:
+            gaps[gap] += 1
+        events: list[dict[str, Any]] = []
+        for gap, frames in enumerate(gaps):
+            if frames < min_single_frames:
+                events.append({"num_active": 1, "duration_frames": frames, "event_type": "transition"})
+            else:
+                for part in _split_frame_quota(frames, min_single_frames, max_event_frames, rng):
+                    events.append({
+                        "num_active": 1,
+                        "duration_frames": part,
+                        "event_type": "normal" if part >= min_single_frames else "transition",
+                    })
+            if gap < len(session):
+                events.extend(session[gap])
+        trajectories.append(events)
+
+    actual = Counter()
+    for events in trajectories:
+        for event in events:
+            actual[event["num_active"]] += event["duration_frames"]
+    if any(actual[order] != target[order] for order in target):
+        raise RuntimeError("Generated dataset does not match its exact frame quotas.")
+    return trajectories, target
+
+
 def assign_speaker_transitions(
     events: Sequence[Mapping[str, int]],
     speakers: Sequence[str],
@@ -359,6 +634,7 @@ def build_continuous_timeline(
                 "end": round(end_frame * frame_resolution / 1000.0, 9),
                 "num_active": int(event["num_active"]),
                 "speakers": list(event["speakers"]),
+                **({"event_type": str(event["event_type"])} if "event_type" in event else {}),
             }
         )
         cursor = end_frame
@@ -461,6 +737,8 @@ def validate_timeline_metadata(metadata: Mapping[str, Any]) -> tuple[dict[int, i
         duration_frames = int(event["duration_frames"])
         num_active = int(event["num_active"])
         event_speakers = event["speakers"]
+        if "event_type" in event and event["event_type"] not in ("normal", "transition"):
+            raise ValueError("Unknown concurrency event type.")
         if start_frame != cursor:
             raise ValueError(f"Timeline gap at frame {cursor}.")
         if end_frame <= start_frame or duration_frames != end_frame - start_frame:
@@ -581,10 +859,11 @@ def fill_speaker_region(
     last_sources: dict[str, dict[str, Any]],
     rng: random.Random,
 ) -> None:
-    gap = STEP_4_SAME_SPEAKER_GAP / 1000.0
     cursor = start
     gain_db = rng.uniform(*STEP_4_GAIN_DB_RANGE)
     while cursor < end - 1e-9:
+        if not queue:
+            raise RuntimeError(f"Source material for {speaker} ended before its activity region.")
         segment = queue.pop()
         previous = last_sources.get(speaker)
         continues_previous = (
@@ -593,12 +872,6 @@ def fill_speaker_region(
             and math.isclose(float(previous["orig_end"]), segment.orig_start, abs_tol=1e-6)
             and math.isclose(float(previous["mix_end"]), cursor, abs_tol=1e-6)
         )
-        if previous is not None and not continues_previous:
-            cursor = max(cursor, float(previous["mix_end"]) + gap)
-            if cursor >= end - 1e-9:
-                queue.append(segment)
-                break
-
         duration = min(segment.duration, end - cursor)
         piece = replace(segment, speaker=speaker, orig_end=segment.orig_start + duration)
         source_end = cursor + duration
@@ -643,6 +916,39 @@ def allocate_sources(
             rng,
         )
     return sources
+
+
+def validate_source_activity(
+    regions: Sequence[Mapping[str, Any]], sources: Sequence[Mapping[str, Any]]
+) -> None:
+    """Ensure rendered source intervals cover every labelled speaker region exactly."""
+    by_speaker: dict[str, list[Mapping[str, Any]]] = {}
+    for source in sources:
+        start, end = float(source["mix_start"]), float(source["mix_end"])
+        if end <= start or not math.isclose(
+            end - start, float(source["orig_duration"]), abs_tol=2e-6
+        ):
+            raise ValueError("Source interval is non-positive or differs from its original audio slice.")
+        by_speaker.setdefault(str(source["speaker"]), []).append(source)
+    for speaker, pieces in by_speaker.items():
+        pieces.sort(key=lambda item: float(item["mix_start"]))
+        for previous, current in zip(pieces, pieces[1:]):
+            if float(current["mix_start"]) < float(previous["mix_end"]) - 2e-6:
+                raise ValueError(f"Source intervals overlap for speaker {speaker}.")
+    for region in regions:
+        speaker = str(region["speaker"])
+        cursor = float(region["start"])
+        end = float(region["end"])
+        for source in by_speaker.get(speaker, []):
+            source_start = float(source["mix_start"])
+            source_end = float(source["mix_end"])
+            if source_end <= cursor + 2e-6 or source_start >= end - 2e-6:
+                continue
+            if not math.isclose(source_start, cursor, abs_tol=2e-6):
+                raise ValueError(f"Unlabelled source gap for speaker {speaker}.")
+            cursor = source_end
+        if not math.isclose(cursor, end, abs_tol=2e-6):
+            raise ValueError(f"Source activity does not fill the region for speaker {speaker}.")
 
 
 def assign_source_groups(
@@ -705,6 +1011,7 @@ def build_candidate_mixture(
     min_overlap_order_duration: float = STEP_4_ALT_MIN_OVERLAP_ORDER_DURATION,
     min_duration_ratio_threshold: float = STEP_4_ALT_MIN_DURATION_RATIO_THRESHOLD,
     max_session_duration: float = STEP_4_ALT_MAX_SESSION_DURATION,
+    planned_events: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if max_speakers < max_speakers_per_frame:
         raise ValueError("max_speakers must be at least max_speakers_per_frame.")
@@ -716,38 +1023,71 @@ def build_candidate_mixture(
 
     configured_min_duration = min_mixture_duration
     configured_max_duration = max_mixture_duration
-    required_duration, effective_min_duration, effective_max_duration = calculate_session_duration_range(
-        frame_ratios,
-        configured_min_duration,
-        configured_max_duration,
-        min_overlap_order_duration,
-        min_duration_ratio_threshold,
-        max_session_duration,
-        frame_resolution,
-    )
-    duration = rng.randint(
-        round(effective_min_duration / frame_resolution),
-        round(effective_max_duration / frame_resolution),
-    ) * frame_resolution
+    if planned_events is None:
+        required_duration, effective_min_duration, effective_max_duration = calculate_session_duration_range(
+            frame_ratios,
+            configured_min_duration,
+            configured_max_duration,
+            min_overlap_order_duration,
+            min_duration_ratio_threshold,
+            max_session_duration,
+            frame_resolution,
+        )
+        duration = rng.randint(
+            round(effective_min_duration / frame_resolution),
+            round(effective_max_duration / frame_resolution),
+        ) * frame_resolution
+    else:
+        required_duration = 0.0
+        effective_min_duration = configured_min_duration
+        effective_max_duration = min(configured_max_duration, max_session_duration)
+        duration = sum(int(event["duration_frames"]) for event in planned_events) * frame_resolution
+        if not effective_min_duration <= duration <= effective_max_duration:
+            raise ValueError("Planned mixture duration is outside the configured session bounds.")
 
     abstract_speakers = [f"speaker_{index:04d}" for index in range(max_speakers)]
-    timeline = _generate_timeline_metadata(
-        abstract_speakers,
-        duration,
-        frame_ratios,
-        frame_resolution,
-        min_event_duration,
-        max_event_duration,
-        rng,
-    )
+    if planned_events is None:
+        timeline = _generate_timeline_metadata(
+            abstract_speakers, duration, frame_ratios, frame_resolution,
+            min_event_duration, max_event_duration, rng,
+        )
+    else:
+        frame_quota = Counter()
+        for event in planned_events:
+            frame_quota[int(event["num_active"])] += int(event["duration_frames"])
+        assigned, speaker_active_frames = assign_speaker_transitions(planned_events, abstract_speakers, rng)
+        timeline = {
+            "duration": round(duration / 1000.0, 9),
+            "frame_resolution": frame_resolution / 1000.0,
+            "total_frames": round(duration / frame_resolution),
+            "speakers": abstract_speakers,
+            "target_ratio": {
+                str(order): frame_quota[order] / round(duration / frame_resolution)
+                for order in range(1, max_speakers_per_frame + 1)
+            },
+            "target_frame_quota": {
+                str(order): frame_quota[order]
+                for order in range(1, max_speakers_per_frame + 1)
+            },
+            "events": build_continuous_timeline(assigned, frame_resolution),
+            "speaker_active_frames": {
+                speaker: speaker_active_frames[speaker] for speaker in abstract_speakers
+            },
+        }
+        actual_frames, actual_ratio = validate_timeline_metadata(timeline)
+        timeline["actual_frames"] = {str(order): value for order, value in actual_frames.items()}
+        timeline["actual_ratio"] = {str(order): value for order, value in actual_ratio.items()}
+        if any(speaker_active_frames[speaker] == 0 for speaker in abstract_speakers):
+            raise ValueError("Planned mixture did not activate every selected speaker.")
     selected = assign_source_groups(timeline, groups, rng)
     speaker_regions = build_speaker_activity_regions(timeline["events"], frame_resolution)
     validate_speaker_activity_regions(timeline["events"], speaker_regions)
     sources = allocate_sources(speaker_regions, selected, rng)
+    validate_source_activity(speaker_regions, sources)
     constrained_orders = [
         order for order, ratio in frame_ratios.items()
         if order > 0 and ratio > 0.0 and ratio >= min_duration_ratio_threshold
-    ]
+    ] if planned_events is None else []
     rare_orders = [
         order for order, ratio in frame_ratios.items()
         if order > 0 and 0.0 < ratio < min_duration_ratio_threshold
@@ -755,10 +1095,11 @@ def build_candidate_mixture(
 
     return {
         "uri": uri,
+        **({"generation_policy": "dataset_level"} if planned_events is not None else {}),
         "sample_rate": STEP_1_AUDIO_SAMPLE_RATE,
         **timeline,
         "speaker_regions": speaker_regions,
-        "same_speaker_gap": STEP_4_SAME_SPEAKER_GAP / 1000.0,
+        "same_speaker_gap": 0.0,
         "duration_policy": {
             "configured_min_duration": configured_min_duration / 1000.0,
             "configured_max_duration": configured_max_duration / 1000.0,
@@ -785,26 +1126,64 @@ def resolve_generation_ratios(args: argparse.Namespace) -> list[float]:
     )
 
 
+def dataset_generation_signature(args: argparse.Namespace) -> str:
+    """Identify settings that determine dataset-level metadata and source selection."""
+    settings = {
+        "policy": "dataset_level",
+        "trajectory_policy": "reversible_excursions_v1",
+        "n_mixtures": args.n_mixtures,
+        "seed": args.seed,
+        "ratios": resolve_generation_ratios(args),
+        "max_speakers": args.max_speakers,
+        "max_speakers_per_frame": args.max_speakers_per_frame,
+        "min_segment_duration": args.min_segment_duration,
+        "min_mixture_duration": args.min_mixture_duration,
+        "max_mixture_duration": args.max_mixture_duration,
+        "max_session_duration": args.max_session_duration,
+        "frame_resolution": args.frame_resolution,
+        "min_event_duration": args.min_event_duration,
+        "max_event_duration": args.max_event_duration,
+        "min_overlap_order_duration": args.min_overlap_order_duration,
+        "min_duration_ratio_threshold": args.min_duration_ratio_threshold,
+        "min_transition_frames": getattr(args, "min_transition_frames", STEP_4_ALT_MIN_TRANSITION_FRAMES),
+        "max_transition_frames": getattr(args, "max_transition_frames", STEP_4_ALT_MAX_TRANSITION_FRAMES),
+    }
+    encoded = json.dumps(settings, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
 def summarize_dataset_overlap(mixtures: Sequence[Mapping[str, Any]]) -> dict[int, dict[str, float | int]]:
-    """Aggregate exact overlap-order coverage across generated mixtures."""
+    """Aggregate overlap-order coverage from the actual event timelines."""
     frames: Counter[int] = Counter()
     duration_by_order: Counter[int] = Counter()
+    mixtures_by_order: Counter[int] = Counter()
+    transition_frames: Counter[int] = Counter()
     total_frames = 0
+    orders: set[int] = set()
     for mixture in mixtures:
         resolution = float(mixture["frame_resolution"])
-        for order, count in mixture["actual_frames"].items():
-            order = int(order)
-            count = int(count)
+        orders.update(int(order) for order in mixture.get("target_frame_quota", {}))
+        present: set[int] = set()
+        for event in mixture["events"]:
+            order = int(event["num_active"])
+            orders.add(order)
+            present.add(order)
+            count = int(event["duration_frames"])
             frames[order] += count
             duration_by_order[order] += count * resolution
             total_frames += count
+            if event.get("event_type") == "transition":
+                transition_frames[order] += count
+        mixtures_by_order.update(present)
     return {
         order: {
             "frames": frames[order],
             "duration": round(duration_by_order[order], 9),
             "ratio": frames[order] / total_frames,
+            "mixtures": mixtures_by_order[order],
+            "transition_frames": transition_frames[order],
         }
-        for order in sorted(frames)
+        for order in sorted(orders)
     }
 
 
@@ -816,53 +1195,80 @@ def run_metadata_dir(args: argparse.Namespace) -> None:
         order: active_ratios[order - 1]
         for order in range(1, max_count + 1)
     }
-    configured_min_duration = args.min_mixture_duration
-    configured_max_duration = args.max_mixture_duration
-    _, effective_min_duration, effective_max_duration = calculate_session_duration_range(
-        frame_ratio_map,
-        configured_min_duration,
-        configured_max_duration,
-        args.min_overlap_order_duration,
-        args.min_duration_ratio_threshold,
-        args.max_session_duration,
-        args.frame_resolution,
+    if args.n_mixtures <= 0 or args.frame_resolution <= 0:
+        raise ValueError("Mixture count and frame resolution must be positive.")
+    if args.min_event_duration <= 0 or args.max_event_duration < args.min_event_duration:
+        raise ValueError("Normal event duration range is invalid.")
+    if args.min_overlap_order_duration <= 0:
+        raise ValueError("Minimum normal overlap duration must be positive.")
+    if not 0 <= args.min_duration_ratio_threshold <= 1:
+        raise ValueError("Minimum duration ratio threshold must be between 0 and 1.")
+    if args.min_mixture_duration <= 0 or args.max_session_duration <= 0:
+        raise ValueError("Mixture and maximum session durations must be positive.")
+    min_duration_frames = math.ceil(args.min_mixture_duration / args.frame_resolution)
+    max_duration_frames = math.floor(
+        min(args.max_mixture_duration, args.max_session_duration) / args.frame_resolution
     )
+    if min_duration_frames < 1 or max_duration_frames < min_duration_frames:
+        raise ValueError("Configured mixture duration range contains no complete frame.")
     rng = random.Random(args.seed)
+    signature = dataset_generation_signature(args)
+    durations = [rng.randint(min_duration_frames, max_duration_frames) for _ in range(args.n_mixtures)]
+    min_normal_frames = math.ceil(
+        max(args.min_event_duration, args.min_overlap_order_duration) / args.frame_resolution
+    )
+    max_normal_frames = math.floor(args.max_event_duration / args.frame_resolution)
+    planned, dataset_target = plan_dataset_trajectories(
+        durations, active_ratios, args.max_speakers, min_normal_frames,
+        max_normal_frames,
+        getattr(args, "min_transition_frames", STEP_4_ALT_MIN_TRANSITION_FRAMES),
+        getattr(args, "max_transition_frames", STEP_4_ALT_MAX_TRANSITION_FRAMES),
+        rng,
+        min_single_frames=math.ceil(args.min_event_duration / args.frame_resolution),
+    )
     mixtures: list[dict[str, Any]] = []
 
     print(f"🚀 Generate frame-balanced metadata in '{args.vad_dir}'")
     print(f"   • Speaker groups: {len(groups)}")
     print(f"   • Target mixtures: {args.n_mixtures}")
-    print(f"   • Frame ratios: {', '.join(f'{count}: {ratio:.2%}' for count, ratio in frame_ratio_map.items())}")
+    print(f"   • Dataset frame ratios: {', '.join(f'{count}: {ratio:.2%}' for count, ratio in frame_ratio_map.items())}")
 
-    for index in range(args.n_mixtures):
-        mixtures.append(
-            build_candidate_mixture(
-                uri=f"{args.prefix}_{index:08d}",
-                groups=groups,
-                rng=rng,
-                count_ratios=active_ratios,
-                min_mixture_duration=args.min_mixture_duration,
-                max_mixture_duration=args.max_mixture_duration,
-                max_speakers=args.max_speakers,
-                max_speakers_per_frame=max_count,
-                frame_resolution=args.frame_resolution,
-                min_event_duration=args.min_event_duration,
-                max_event_duration=args.max_event_duration,
-                min_overlap_order_duration=args.min_overlap_order_duration,
-                min_duration_ratio_threshold=args.min_duration_ratio_threshold,
-                max_session_duration=args.max_session_duration,
-            )
+    for index, events in enumerate(planned):
+        mixture = build_candidate_mixture(
+            uri="",
+            groups=groups,
+            rng=rng,
+            count_ratios=active_ratios,
+            min_mixture_duration=args.min_mixture_duration,
+            max_mixture_duration=args.max_mixture_duration,
+            max_speakers=args.max_speakers,
+            max_speakers_per_frame=max_count,
+            frame_resolution=args.frame_resolution,
+            min_event_duration=args.min_event_duration,
+            max_event_duration=args.max_event_duration,
+            min_overlap_order_duration=args.min_overlap_order_duration,
+            min_duration_ratio_threshold=args.min_duration_ratio_threshold,
+            max_session_duration=args.max_session_duration,
+            planned_events=events,
         )
+        mixture["generation_signature"] = signature
+        mixtures.append(mixture)
         write_progress(index + 1, args.n_mixtures)
 
     print()
+    rng.shuffle(mixtures)
+    for index, mixture in enumerate(mixtures):
+        mixture["uri"] = f"{args.prefix}_{index:08d}"
+    summary = summarize_dataset_overlap(mixtures)
+    if any(summary[order]["frames"] != dataset_target[order] for order in dataset_target):
+        raise RuntimeError("Actual dataset timelines do not match the planned frame quotas.")
     write_json(mixtures, args.out, force=args.force)
     print("   • Dataset overlap coverage:")
-    for order, values in summarize_dataset_overlap(mixtures).items():
+    for order, values in summary.items():
         print(
-            f"     {order} speakers: {values['frames']} frames, "
-            f"{values['duration']:.2f} s, {values['ratio']:.2%}"
+            f"     {order} speakers: {values['frames']}/{dataset_target[order]} frames, "
+            f"{values['duration']:.2f} s, {values['ratio']:.2%}, "
+            f"{values['mixtures']}/{len(mixtures)} mixtures"
         )
     print(f"   • Output: {args.out}")
     print("✅ Metadata completed.")
@@ -879,13 +1285,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frame-resolution", type=float, default=STEP_4_ALT_FRAME_RESOLUTION)
     parser.add_argument("--min-event-duration", type=float, default=STEP_4_ALT_MIN_EVENT_DURATION)
     parser.add_argument("--max-event-duration", type=float, default=STEP_4_ALT_MAX_EVENT_DURATION)
+    parser.add_argument("--min-transition-frames", type=int, default=STEP_4_ALT_MIN_TRANSITION_FRAMES)
+    parser.add_argument("--max-transition-frames", type=int, default=STEP_4_ALT_MAX_TRANSITION_FRAMES)
     parser.add_argument("--seed", type=int, default=STEP_4_SEED)
     parser.add_argument("--prefix", type=str, default="mix")
     parser.add_argument("--max-speakers", type=int, required=True)
     parser.add_argument("--max-speakers-per-frame", type=int, required=True)
     parser.add_argument("--max-speakers-per-frame-ratio", nargs="+")
-    parser.add_argument("--min-overlap-order-duration", type=float, default=STEP_4_ALT_MIN_OVERLAP_ORDER_DURATION)
-    parser.add_argument("--min-duration-ratio-threshold", type=float, default=STEP_4_ALT_MIN_DURATION_RATIO_THRESHOLD)
+    parser.add_argument("--min-overlap-order-duration", type=float, default=STEP_4_ALT_MIN_OVERLAP_ORDER_DURATION, help="Minimum normal target-event duration in ms; bridge events are exempt.")
+    parser.add_argument("--min-duration-ratio-threshold", type=float, default=STEP_4_ALT_MIN_DURATION_RATIO_THRESHOLD, help="Retained for CLI compatibility; reports rare dataset orders but does not lengthen mixtures.")
     parser.add_argument("--max-session-duration", type=float, default=STEP_4_ALT_MAX_SESSION_DURATION)
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
