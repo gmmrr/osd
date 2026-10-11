@@ -6,6 +6,8 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
+from scipy.optimize import linear_sum_assignment
+
 from utils.visualization import (
     AudioVisualizationRecord,
     SpeakerInterval,
@@ -29,35 +31,79 @@ class DiarizationAnnotation:
     intervals: list[SpeakerInterval]
 
 
-def first_shared_single_speaker(
+def _speaker_timelines(
+    speakers: list[str],
+    segments: list[SpeakerInterval],
+) -> dict[str, list[tuple[float, float]]]:
+    """Build merged, non-overlapping intervals for every speaker."""
+    timelines: dict[str, list[tuple[float, float]]] = {speaker: [] for speaker in speakers}
+    for speaker in speakers:
+        speaker_segments = sorted(
+            (segment.start, segment.end)
+            for segment in segments
+            if segment.speaker == speaker and segment.end > segment.start
+        )
+        for start, end in speaker_segments:
+            if timelines[speaker] and start <= timelines[speaker][-1][1]:
+                previous_start, previous_end = timelines[speaker][-1]
+                timelines[speaker][-1] = (previous_start, max(previous_end, end))
+            else:
+                timelines[speaker].append((start, end))
+    return timelines
+
+
+def _overlap_duration(
+    first: list[tuple[float, float]],
+    second: list[tuple[float, float]],
+) -> float:
+    """Return total intersection duration of two merged timelines."""
+    total = 0.0
+    first_index = 0
+    second_index = 0
+    while first_index < len(first) and second_index < len(second):
+        first_start, first_end = first[first_index]
+        second_start, second_end = second[second_index]
+        total += max(0.0, min(first_end, second_end) - max(first_start, second_start))
+        if first_end <= second_end:
+            first_index += 1
+        else:
+            second_index += 1
+    return total
+
+
+def optimal_speaker_alignment(
+    prediction_speakers: list[str],
     prediction_segments: list[SpeakerInterval],
+    ground_truth_speakers: list[str],
     ground_truth_segments: list[SpeakerInterval],
-) -> tuple[str, str] | None:
-    """Return the prediction/GT speakers at the first shared single-speaker frame."""
-    boundaries = sorted(
-        {
-            time
-            for segment in (*prediction_segments, *ground_truth_segments)
-            for time in (segment.start, segment.end)
-        }
+) -> dict[str, str]:
+    """Find the one-to-one speaker mapping with maximum total time overlap."""
+    if not prediction_speakers or not ground_truth_speakers:
+        return {}
+
+    prediction_timelines = _speaker_timelines(prediction_speakers, prediction_segments)
+    ground_truth_timelines = _speaker_timelines(ground_truth_speakers, ground_truth_segments)
+    overlap = [
+        [
+            _overlap_duration(
+                prediction_timelines[prediction_speaker],
+                ground_truth_timelines[ground_truth_speaker],
+            )
+            for ground_truth_speaker in ground_truth_speakers
+        ]
+        for prediction_speaker in prediction_speakers
+    ]
+
+    prediction_indices, ground_truth_indices = linear_sum_assignment(
+        [[-duration for duration in row] for row in overlap]
     )
-    for start, end in zip(boundaries, boundaries[1:]):
-        if end <= start:
-            continue
-        midpoint = start + (end - start) / 2.0
-        prediction_active = {
-            segment.speaker
-            for segment in prediction_segments
-            if segment.start <= midpoint < segment.end
-        }
-        ground_truth_active = {
-            segment.speaker
-            for segment in ground_truth_segments
-            if segment.start <= midpoint < segment.end
-        }
-        if len(prediction_active) == 1 and len(ground_truth_active) == 1:
-            return next(iter(prediction_active)), next(iter(ground_truth_active))
-    return None
+    return {
+        prediction_speakers[prediction_index]: ground_truth_speakers[ground_truth_index]
+        for prediction_index, ground_truth_index in zip(
+            prediction_indices, ground_truth_indices
+        )
+        if overlap[prediction_index][ground_truth_index] > 0.0
+    }
 
 
 def align_prediction_speakers(
@@ -66,24 +112,37 @@ def align_prediction_speakers(
     ground_truth_speakers: list[str],
     ground_truth_segments: list[SpeakerInterval],
 ) -> list[str]:
-    """Align prediction color/lane order to GT using the first solo frame."""
-    match = first_shared_single_speaker(prediction_segments, ground_truth_segments)
-    if match is None:
-        return prediction_speakers
-
-    prediction_speaker, ground_truth_speaker = match
-    ground_truth_index = ground_truth_speakers.index(ground_truth_speaker)
-    if ground_truth_index >= len(prediction_speakers):
+    """Align prediction color/lane order using maximum-overlap assignment."""
+    mapping = optimal_speaker_alignment(
+        prediction_speakers,
+        prediction_segments,
+        ground_truth_speakers,
+        ground_truth_segments,
+    )
+    if not mapping:
         return prediction_speakers
 
     aligned: list[str | None] = [None] * len(prediction_speakers)
-    aligned[ground_truth_index] = prediction_speaker
-    remaining = iter(
-        speaker for speaker in prediction_speakers if speaker != prediction_speaker
-    )
+    remaining: list[str] = []
+    ground_truth_indices = {
+        speaker: index for index, speaker in enumerate(ground_truth_speakers)
+    }
+    for prediction_speaker in prediction_speakers:
+        ground_truth_speaker = mapping.get(prediction_speaker)
+        ground_truth_index = (
+            ground_truth_indices[ground_truth_speaker]
+            if ground_truth_speaker is not None
+            else len(aligned)
+        )
+        if ground_truth_index < len(aligned) and aligned[ground_truth_index] is None:
+            aligned[ground_truth_index] = prediction_speaker
+        else:
+            remaining.append(prediction_speaker)
+
+    remaining_iter = iter(remaining)
     for index, speaker in enumerate(aligned):
         if speaker is None:
-            aligned[index] = next(remaining)
+            aligned[index] = next(remaining_iter)
     return [speaker for speaker in aligned if speaker is not None]
 
 
