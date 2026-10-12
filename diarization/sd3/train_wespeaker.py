@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ import torch
 from pyannote.core import Annotation, Segment, Timeline
 from pyannote.database.protocol.speaker_diarization import SpeakerDiarizationProtocol
 from pyannote.database.util import load_lst, load_rttm, load_uem
+from pyannote.audio.utils.random import create_rng_for_worker
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -176,8 +178,8 @@ def run_training(args: argparse.Namespace) -> Path:
     output_dir = resolve_path(args.output_dir)
     if output_dir == DEFAULT_MODEL or DEFAULT_MODEL in output_dir.parents:
         raise ValueError("Refusing to overwrite the original WeSpeaker model.")
-    if output_dir.parent != DEFAULT_MODEL.parent or not output_dir.name.startswith("wespeaker-train-"):
-        raise ValueError(f"Output must be a wespeaker-train-* directory under {DEFAULT_MODEL.parent}")
+    if output_dir.parent != DEFAULT_MODEL.parent:
+        raise ValueError(f"Output must be a directory directly under {DEFAULT_MODEL.parent}")
     if (output_dir / "pytorch_model.bin").exists() and args.resume is None:
         raise FileExistsError(f"Trained WeSpeaker already exists: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -191,6 +193,68 @@ def run_training(args: argparse.Namespace) -> Path:
             if result is not None:
                 self.model.log("train_loss", result["loss"], on_step=False, on_epoch=True, prog_bar=True)
             return result
+
+        def train__iter(self):
+            """Sample chunks while normalizing crop lengths for rounding."""
+            rng = create_rng_for_worker(self.model)
+            classes = list(self.specifications.classes)
+            batch_duration = rng.uniform(self.min_duration, self.duration)
+            num_samples = 0
+
+            while True:
+                rng.shuffle(classes)
+                for klass in classes:
+                    y = self.specifications.classes.index(klass)
+                    for _ in range(self.num_chunks_per_class):
+                        file, *_ = rng.choices(
+                            self._train[klass],
+                            weights=[f["duration"] for f in self._train[klass]],
+                            k=1,
+                        )
+                        speech_turn, *_ = rng.choices(
+                            file["speech_turns"],
+                            weights=[s.duration for s in file["speech_turns"]],
+                            k=1,
+                        )
+                        target_samples = math.floor(
+                            batch_duration * self.model.audio.sample_rate
+                        )
+                        if speech_turn.duration < batch_duration:
+                            X, _ = self.model.audio.crop(file, speech_turn)
+                        else:
+                            start_time = rng.uniform(
+                                speech_turn.start, speech_turn.end - batch_duration
+                            )
+                            X, _ = self.model.audio.crop(
+                                file,
+                                Segment(start_time, start_time + batch_duration),
+                            )
+
+                        if X.shape[1] < target_samples:
+                            missing = target_samples - X.shape[1]
+                            left_pad = rng.randint(0, missing)
+                            X = F.pad(X, (left_pad, missing - left_pad))
+                        elif X.shape[1] > target_samples:
+                            X = X[:, :target_samples]
+
+                        yield {"X": X, "y": y}
+                        num_samples += 1
+                        if num_samples == self.batch_size:
+                            batch_duration = rng.uniform(self.min_duration, self.duration)
+                            num_samples = 0
+
+        def collate_fn(self, batch, stage="train"):
+            # Random chunk durations are converted to sample counts by the
+            # parent task. Floating-point rounding can produce tensors that
+            # differ by one sample within the same batch, which default_collate
+            # cannot stack. Right-pad each batch to its longest waveform.
+            if stage == "train" and batch:
+                max_samples = max(item["X"].shape[-1] for item in batch)
+                for item in batch:
+                    missing = max_samples - item["X"].shape[-1]
+                    if missing:
+                        item["X"] = F.pad(item["X"], (0, missing))
+            return super().collate_fn(batch, stage=stage)
 
         def val__len__(self):
             return len(pairs)
@@ -237,7 +301,18 @@ def run_training(args: argparse.Namespace) -> Path:
             val_text = f"{float(validation):.4f}" if validation is not None else "n/a"
             print(f"   • Epoch {trainer.current_epoch + 1}: train loss={train_text}, {monitor}={val_text}")
 
-    callbacks = [ModelCheckpoint(dirpath=output_dir / "checkpoints", monitor=monitor, mode=mode, save_top_k=args.save_top_k, save_last=True), EpochSummary()]
+    callbacks = [
+        ModelCheckpoint(
+            dirpath=output_dir / "checkpoints",
+            filename="epoch={epoch}-eer={EqualErrorRate:.4f}",
+            monitor=monitor,
+            mode=mode,
+            save_top_k=args.save_top_k,
+            save_last=True,
+            auto_insert_metric_name=False,
+        ),
+        EpochSummary(),
+    ]
     if args.early_stopping_patience > 0:
         callbacks.append(EarlyStopping(monitor=monitor, mode=mode, patience=args.early_stopping_patience))
 
@@ -260,6 +335,16 @@ def run_training(args: argparse.Namespace) -> Path:
     resume = resolve_path(args.resume) if args.resume else None
     if resume is not None and not resume.is_file():
         raise FileNotFoundError(f"Resume checkpoint not found: {resume}")
+    if resume is not None:
+        # PyTorch 2.6 defaults torch.load(..., weights_only=True). Lightning
+        # needs to restore the full trusted local checkpoint (optimizer,
+        # callbacks, epoch, and global step), whose metadata includes
+        # torch.torch_version.TorchVersion and pyannote task specifications.
+        from pyannote.audio.core.task import Problem, Resolution, Specifications
+
+        torch.serialization.add_safe_globals(
+            [torch.torch_version.TorchVersion, Problem, Resolution, Specifications]
+        )
     trainer.fit(model, ckpt_path=str(resume) if resume else None)
     if not callbacks[0].last_model_path:
         raise RuntimeError("Training completed without a checkpoint.")
