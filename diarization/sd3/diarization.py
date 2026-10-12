@@ -89,7 +89,8 @@ def load_pipeline(
 ):
     """Build the original pyannote pipeline with two selected model weights."""
     import yaml
-    from pyannote.audio import Model, Pipeline
+    from pyannote.audio import Model
+    from pyannote.audio.pipelines import SpeakerDiarization
 
     pipeline_config = resolve_pipeline_config(DEFAULT_PIPELINE_PATH)
     segmentation = Model.from_pretrained(resolve_model_file(osd_model), map_location="cpu")
@@ -100,15 +101,16 @@ def load_pipeline(
     if embedding.__class__.__name__ != "WeSpeakerResNet34":
         raise ValueError("Selected embedding checkpoint must be WeSpeakerResNet34.")
 
-    # Pass loaded model objects to pyannote. pyannote.audio 4.0.7 otherwise
-    # interprets any path containing 'wespeaker' as ONNX, even for PyTorch files.
+    # Build the pipeline directly from loaded model objects. Pipeline.from_pretrained
+    # only accepts a YAML path (or Hub repository ID), not an in-memory dictionary.
+    # Passing the embedding object also prevents paths containing "wespeaker" from
+    # being incorrectly interpreted as ONNX models.
     config = yaml.safe_load(pipeline_config.read_text(encoding="utf-8"))
-    config["pipeline"]["params"]["segmentation"] = segmentation
-    config["pipeline"]["params"]["embedding"] = embedding
-    config["pipeline"]["params"]["legacy"] = True
-    pipeline = Pipeline.from_pretrained(config)
-    if pipeline is None:
-        raise RuntimeError(f"Could not load pipeline config: {pipeline_config}")
+    pipeline_params = dict(config["pipeline"].get("params", {}))
+    pipeline_params["segmentation"] = segmentation
+    pipeline_params["embedding"] = embedding
+    pipeline = SpeakerDiarization(**pipeline_params)
+    pipeline.instantiate(config["params"])
 
     try:
         pipeline.to(device)
@@ -200,6 +202,13 @@ def diarize_file(
             raise RuntimeError(
                 f"MPS inference failed ({error}); CPU retry also failed ({cpu_error})."
             ) from cpu_error
+
+    # pyannote.audio 4 returns a DiarizeOutput wrapper by default, while
+    # pyannote.audio 3 (and legacy mode) returns Annotation directly.
+    # The files written by this script should always use the full diarization
+    # annotation, including overlapping speaker turns.
+    if hasattr(annotation, "speaker_diarization"):
+        annotation = annotation.speaker_diarization
 
     if output_rttm is not None:
         write_rttm(annotation, output_rttm)
