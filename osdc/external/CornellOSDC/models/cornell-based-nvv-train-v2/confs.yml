@@ -1,0 +1,61 @@
+augmentation:
+  abs_stats:
+  - -16.7
+  - 7
+  probs: null
+  rel_stats:
+  - 2.78
+  - 4
+data:
+  audio_root: /Users/gmmrr/Documents/GitHub/osd/data/osdc_44_cornell
+  fs: 16000
+  label_root: /Users/gmmrr/Documents/GitHub/osd/osdc/external/CornellOSDC/egs/NvvMix/data/osdc_44_cornell
+  n_classes: 5
+  segment: 500
+fbank_kaldi:
+  dither: 1.0e-08
+  high_freq: -400
+  low_freq: 80
+  num_mel_bins: 80
+  sample_frequency: 16000
+  use_energy: false
+feats:
+  hop_size: 0.01
+  inject_noise: false
+  n_feats: 80
+  type: mfcc_kaldi
+labels:
+  collar_ph: 0.0
+  merge_ph: 0.0
+  merge_vad: 0.0
+mels:
+  hop_length: 160
+  n_fft: 400
+  n_mels: 40
+  win_length: 400
+mfcc:
+  log_mels: true
+  n_mfcc: 40
+  sample_rate: 16000
+mfcc_kaldi:
+  dither: 0.0
+  high_freq: -400
+  low_freq: 40
+  num_ceps: 80
+  num_mel_bins: 80
+  sample_frequency: 16000
+  use_energy: false
+model: tcn
+opt:
+  lr: 3.0e-05
+  weight_decay: 1.0e-05
+spectrogram_kaldi:
+  dither: 0.0
+  sample_frequency: 16000
+task: count
+training:
+  accumulate_batches: 8
+  batch_size: 2
+  gradient_clip: 5
+  n_epochs: 50
+  num_workers: 0
