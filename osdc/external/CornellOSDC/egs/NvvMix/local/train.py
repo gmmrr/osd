@@ -42,7 +42,7 @@ class OSDC_NVVMIX(ami_train.OSDC_AMI):
             dataset,
             batch_size=self.configs["training"]["batch_size"],
             shuffle=shuffle,
-            drop_last=True,
+            drop_last=split == "train",
             num_workers=self.configs["training"]["num_workers"],
             persistent_workers=False,
         )
@@ -68,11 +68,12 @@ def main() -> None:
 
     checkpoint = ModelCheckpoint(
         dirpath=args.output_dir / "checkpoints",
-        filename="epoch{epoch:03d}-val{val_loss:.4f}",
+        filename="epoch={epoch}-val_loss={val_loss:.4f}-val_recall={val_recall:.4f}",
         monitor="val_loss",
         mode="min",
-        save_top_k=5,
+        save_top_k=-1,
         save_last=True,
+        auto_insert_metric_name=False,
     )
     early_stop = EarlyStopping(
         monitor="val_loss", patience=20, mode="min", verbose=True

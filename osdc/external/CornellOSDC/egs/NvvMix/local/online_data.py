@@ -27,6 +27,7 @@ class OnlineFeats(ami_online_data.OnlineFeats):
         self.configs = configs
         self.segment = segment
         self.probs = None
+        self.split = split
         audio_root = Path(audio_root).resolve()
         label_root = Path(label_root).resolve()
         manifests = sorted(label_root.glob(f"*/manifests/{split}.json"))
@@ -45,21 +46,33 @@ class OnlineFeats(ami_online_data.OnlineFeats):
         if not self.records:
             raise ValueError(f"No usable {split} recordings under {label_root}")
 
-        self.tot_length = sum(
-            len(sf.SoundFile(record["label"])) for record in self.records
-        ) // self.segment
+        if split == "train":
+            # Preserve Cornell's online random sampling for training.
+            self.examples = None
+            self.tot_length = sum(
+                len(sf.SoundFile(record["label"])) for record in self.records
+            ) // self.segment
+        else:
+            # Validation and test must evaluate exactly the same windows on
+            # every epoch.  Leaving sampling to ``noaugm`` would ignore the
+            # DataLoader index and randomly change both the recording and the
+            # segment start each time an item is requested.
+            self.examples = []
+            for record in self.records:
+                label_length = len(sf.SoundFile(record["label"]))
+                for start in range(0, label_length - self.segment - 2, self.segment):
+                    self.examples.append((record, start))
+            self.tot_length = len(self.examples)
         self.set_feats_func()
         print(
-            f"OnlineFeats[{split}]: {len(self.records)} recordings from "
-            f"{len(manifests)} NvvMix sources."
+            f"OnlineFeats[{split}]: {len(self.records)} recordings, "
+            f"{self.tot_length} {'random samples' if split == 'train' else 'fixed windows'} "
+            f"from {len(manifests)} NvvMix sources."
         )
 
-    def noaugm(self):
-        record = random.choice(self.records)
+    def _load_segment(self, record, start):
         label_file = record["label"]
         audio_file = record["audio"]
-        label_length = len(sf.SoundFile(label_file))
-        start = np.random.randint(0, label_length - self.segment - 2)
         stop = start + self.segment
         labels, _ = sf.read(label_file, start=start, stop=stop)
 
@@ -78,3 +91,16 @@ class OnlineFeats(ami_online_data.OnlineFeats):
             torch.from_numpy(labels).long(),
             torch.ones(len(labels), dtype=torch.bool),
         )
+
+    def noaugm(self):
+        record = random.choice(self.records)
+        label_length = len(sf.SoundFile(record["label"]))
+        start = np.random.randint(0, label_length - self.segment - 2)
+        return self._load_segment(record, start)
+
+    def __getitem__(self, item):
+        if self.split == "train":
+            return self.noaugm()
+        assert self.examples is not None
+        record, start = self.examples[item]
+        return self._load_segment(record, start)
